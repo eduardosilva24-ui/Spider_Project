@@ -23,18 +23,18 @@ const LEVEL_STEP_XP = 125;
 export function normalizeSettings(settings?: Partial<SpiderSettings>): SpiderSettings {
   return {
     ...DEFAULT_SETTINGS,
-    ...settings,
-    targetWeightKg: toSafeNumber(settings?.targetWeightKg, DEFAULT_SETTINGS.targetWeightKg),
-    dailyWaterGoalMl: toSafeNumber(settings?.dailyWaterGoalMl, DEFAULT_SETTINGS.dailyWaterGoalMl),
-    weeklyWorkoutGoal: toSafeNumber(settings?.weeklyWorkoutGoal, DEFAULT_SETTINGS.weeklyWorkoutGoal),
-    weeklyRunGoal: toSafeNumber(settings?.weeklyRunGoal, DEFAULT_SETTINGS.weeklyRunGoal),
-    xpWorkout: toSafeNumber(settings?.xpWorkout, DEFAULT_SETTINGS.xpWorkout),
-    xpRun: toSafeNumber(settings?.xpRun, DEFAULT_SETTINGS.xpRun),
-    xpNutrition: toSafeNumber(settings?.xpNutrition, DEFAULT_SETTINGS.xpNutrition),
-    xpWater: toSafeNumber(settings?.xpWater, DEFAULT_SETTINGS.xpWater),
-    xpWeight: toSafeNumber(settings?.xpWeight, DEFAULT_SETTINGS.xpWeight),
-    xpStreak: toSafeNumber(settings?.xpStreak, DEFAULT_SETTINGS.xpStreak),
-    xpMission: toSafeNumber(settings?.xpMission, DEFAULT_SETTINGS.xpMission),
+    userName: String(settings?.userName ?? DEFAULT_SETTINGS.userName).trim() || DEFAULT_SETTINGS.userName,
+    targetWeightKg: toNonNegativeNumber(settings?.targetWeightKg, DEFAULT_SETTINGS.targetWeightKg),
+    dailyWaterGoalMl: toPositiveNumber(settings?.dailyWaterGoalMl, DEFAULT_SETTINGS.dailyWaterGoalMl),
+    weeklyWorkoutGoal: toPositiveNumber(settings?.weeklyWorkoutGoal, DEFAULT_SETTINGS.weeklyWorkoutGoal),
+    weeklyRunGoal: toPositiveNumber(settings?.weeklyRunGoal, DEFAULT_SETTINGS.weeklyRunGoal),
+    xpWorkout: toNonNegativeNumber(settings?.xpWorkout, DEFAULT_SETTINGS.xpWorkout),
+    xpRun: toNonNegativeNumber(settings?.xpRun, DEFAULT_SETTINGS.xpRun),
+    xpNutrition: toNonNegativeNumber(settings?.xpNutrition, DEFAULT_SETTINGS.xpNutrition),
+    xpWater: toNonNegativeNumber(settings?.xpWater, DEFAULT_SETTINGS.xpWater),
+    xpWeight: toNonNegativeNumber(settings?.xpWeight, DEFAULT_SETTINGS.xpWeight),
+    xpStreak: toNonNegativeNumber(settings?.xpStreak, DEFAULT_SETTINGS.xpStreak),
+    xpMission: toNonNegativeNumber(settings?.xpMission, DEFAULT_SETTINGS.xpMission),
   };
 }
 
@@ -439,4 +439,12 @@ function minBy<T>(entries: T[], selector: (entry: T) => number) {
 function toSafeNumber(value: unknown, fallback: number) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function toNonNegativeNumber(value: unknown, fallback: number) {
+  return Math.max(0, toSafeNumber(value, fallback));
+}
+
+function toPositiveNumber(value: unknown, fallback: number) {
+  return Math.max(1, toSafeNumber(value, fallback));
 }

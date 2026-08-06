@@ -42,8 +42,12 @@ export function NutritionView({
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.date || !form.time || !foods.length) return;
-    await onSave('nutrition', touch({ ...form, foods }));
-    setForm(createNutrition({ type: form.type }));
+    try {
+      await onSave('nutrition', touch({ ...form, foods }));
+      setForm(createNutrition({ type: form.type }));
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
@@ -158,7 +162,11 @@ export function WaterView({
 
   async function addWater(amountMl: number) {
     if (amountMl <= 0) return;
-    await onSave('water', createWater(amountMl));
+    try {
+      await onSave('water', createWater(amountMl));
+    } catch {
+      // O erro já é mostrado pelo AppShell.
+    }
   }
 
   return (
@@ -231,8 +239,12 @@ export function DiaryView({ entries, onSave, saving }: { entries: DiaryEntry[]; 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.date || !form.text.trim()) return;
-    await onSave('diary', touch(form));
-    setForm(createDiary());
+    try {
+      await onSave('diary', touch(form));
+      setForm(createDiary());
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
@@ -296,7 +308,11 @@ export function MissionsView({
 
   async function complete(title: string, key: string, xp: number) {
     if (completed.has(key)) return;
-    await onSave('missions', createMission(title, key, xp));
+    try {
+      await onSave('missions', createMission(title, key, xp));
+    } catch {
+      // O erro já é mostrado pelo AppShell.
+    }
   }
 
   return (

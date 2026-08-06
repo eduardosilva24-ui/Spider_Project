@@ -5,7 +5,16 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   build: {
-    outDir: 'docs',
+    outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          charts: ['chart.js', 'react-chartjs-2'],
+          motion: ['framer-motion'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
   },
 });

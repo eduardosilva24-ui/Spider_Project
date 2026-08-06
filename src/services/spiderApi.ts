@@ -14,6 +14,7 @@ type BootstrapPayload = Omit<SpiderData, 'settings'> & {
 };
 
 const API_URL = import.meta.env.VITE_SPIDER_API_URL || DEFAULT_API_URL;
+const REQUEST_TIMEOUT_MS = 45_000;
 
 export class SpiderApiError extends Error {
   constructor(
@@ -73,28 +74,43 @@ async function requestGet<T>(action: string, params?: Record<string, string>) {
     url.searchParams.set(key, value);
   });
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    redirect: 'follow',
-  });
-
-  return readEnvelope<T>(response);
+  return requestWithEnvelope<T>(url.toString(), { method: 'GET' });
 }
 
 async function requestPost<T>(action: string, payload: Record<string, unknown>) {
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
 
-  const response = await fetch(url.toString(), {
+  return requestWithEnvelope<T>(url.toString(), {
     method: 'POST',
-    redirect: 'follow',
-    headers: {
-      'Content-Type': 'application/json',
-    },
     body: JSON.stringify({ action, ...payload }),
   });
+}
 
-  return readEnvelope<T>(response);
+async function requestWithEnvelope<T>(url: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      ...init,
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+
+    return await readEnvelope<T>(response);
+  } catch (caught) {
+    if (caught instanceof SpiderApiError) throw caught;
+    if (caught instanceof DOMException && caught.name === 'AbortError') {
+      throw new SpiderApiError('A planilha demorou mais que o esperado para responder. Tente atualizar novamente.');
+    }
+
+    throw new SpiderApiError('Não foi possível alcançar a planilha. Verifique sua conexão e tente novamente.');
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 async function readEnvelope<T>(response: Response) {
@@ -123,11 +139,27 @@ async function readEnvelope<T>(response: Response) {
 }
 
 function normalizeBootstrap(payload: BootstrapPayload): SpiderData {
+  const source = payload ?? ({} as BootstrapPayload);
+
   return {
     ...EMPTY_DATA,
-    ...payload,
-    settings: normalizeSettings({ ...DEFAULT_SETTINGS, ...payload.settings }),
-    spreadsheetUrl: payload.spreadsheetUrl || '',
-    lastSyncedAt: payload.lastSyncedAt || new Date().toISOString(),
+    dashboard: asArray(source.dashboard),
+    workouts: asArray(source.workouts),
+    runs: asArray(source.runs),
+    weight: asArray(source.weight),
+    measurements: asArray(source.measurements),
+    nutrition: asArray(source.nutrition),
+    water: asArray(source.water),
+    diary: asArray(source.diary),
+    missions: asArray(source.missions),
+    records: asArray(source.records),
+    reports: asArray(source.reports),
+    settings: normalizeSettings({ ...DEFAULT_SETTINGS, ...(source.settings ?? {}) }),
+    spreadsheetUrl: source.spreadsheetUrl || '',
+    lastSyncedAt: source.lastSyncedAt || new Date().toISOString(),
   };
+}
+
+function asArray<T>(value: T[] | undefined) {
+  return Array.isArray(value) ? value : [];
 }

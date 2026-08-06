@@ -60,14 +60,28 @@ export function daysAgoISO(days: number, from = new Date()) {
 export function minutesToPace(distanceKm: number, durationMinutes: number) {
   if (!distanceKm || !durationMinutes) return '';
   const pace = durationMinutes / distanceKm;
-  const minutes = Math.floor(pace);
-  const seconds = Math.round((pace - minutes) * 60);
+  const totalSeconds = Math.max(0, Math.round(pace * 60));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}/km`;
 }
 
 export function paceToSeconds(pace: string) {
   const clean = pace.replace('/km', '').trim();
-  const [minutes, seconds] = clean.split(':').map(Number);
-  if (!Number.isFinite(minutes)) return Number.POSITIVE_INFINITY;
-  return minutes * 60 + (Number.isFinite(seconds) ? seconds : 0);
+  if (!clean) return Number.POSITIVE_INFINITY;
+
+  if (clean.includes(':')) {
+    const [minutesValue, secondsValue, ...extra] = clean.split(':');
+    const minutes = Number(minutesValue);
+    const seconds = Number(secondsValue);
+    if (extra.length || !Number.isInteger(minutes) || minutes < 0 || !Number.isInteger(seconds) || seconds < 0 || seconds >= 60) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return minutes * 60 + seconds;
+  }
+
+  const decimalMinutes = Number(clean.replace(',', '.'));
+  return Number.isFinite(decimalMinutes) && decimalMinutes >= 0
+    ? Math.round(decimalMinutes * 60)
+    : Number.POSITIVE_INFINITY;
 }

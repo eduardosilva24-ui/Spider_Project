@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_SETTINGS, EMPTY_DATA } from '../domain/constants';
 import { calculateSummary, deriveRecords, normalizeSettings } from '../domain/calculations';
 import { spiderApi } from '../services/spiderApi';
@@ -58,19 +58,30 @@ export function useSpiderData() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (refreshRequestRef.current) return refreshRequestRef.current;
+
     setStatus('loading');
     setError(null);
 
-    try {
-      const remoteData = await spiderApi.bootstrap();
-      const records = deriveRecords(remoteData);
-      setData({ ...remoteData, records });
-      setStatus('ready');
-      void spiderApi.replaceDerivedRecords(records).catch(() => undefined);
-    } catch (caught) {
-      setStatus('error');
-      setError(caught instanceof Error ? caught.message : 'Erro desconhecido ao carregar dados.');
-    }
+    const request = (async () => {
+      try {
+        const remoteData = await spiderApi.bootstrap();
+        const records = deriveRecords(remoteData);
+        const nextData = { ...remoteData, records };
+        dataRef.current = nextData;
+        setData(nextData);
+        setStatus('ready');
+        void queueDerivedSync(records).catch(() => undefined);
+      } catch (caught) {
+        setStatus('error');
+        setError(caught instanceof Error ? caught.message : 'Erro desconhecido ao carregar dados.');
+      } finally {
+        refreshRequestRef.current = null;
+      }
+    })();
+
+    refreshRequestRef.current = request;
+    return request;
   }, []);
 
   useEffect(() => {
@@ -84,26 +95,25 @@ export function useSpiderData() {
 
       try {
         const saved = await spiderApi.upsertRecord(module, record);
-        let derivedRecords: RecordEntry[] | null = null;
+        const current = dataRef.current;
+        const nextRecords = upsertById(current[module] as ModuleRecordMap[TModule][], saved);
+        const nextData: SpiderData = {
+          ...current,
+          [module]: sortModuleRecords(module, nextRecords),
+          lastSyncedAt: new Date().toISOString(),
+        };
 
-        setData((current) => {
-          const nextRecords = upsertById(current[module] as ModuleRecordMap[TModule][], saved);
-          const nextData: SpiderData = {
-            ...current,
-            [module]: sortModuleRecords(module, nextRecords),
-            lastSyncedAt: new Date().toISOString(),
-          };
+        if (module !== 'reports' && module !== 'missions') {
+          nextData.records = deriveRecords(nextData);
+        }
 
-          if (module !== 'reports' && module !== 'missions') {
-            derivedRecords = deriveRecords(nextData);
-            nextData.records = derivedRecords;
-          }
+        dataRef.current = nextData;
+        setData(nextData);
 
-          return nextData;
-        });
-
-        if (derivedRecords) {
-          await spiderApi.replaceDerivedRecords(derivedRecords);
+        if (module !== 'reports' && module !== 'missions') {
+          await queueDerivedSync(nextData.records).catch((caught) => {
+            setError(caught instanceof Error ? `Registro salvo, mas os recordes não foram sincronizados: ${caught.message}` : 'Registro salvo, mas os recordes não foram sincronizados.');
+          });
         }
 
         return saved;
@@ -123,22 +133,19 @@ export function useSpiderData() {
 
     try {
       await spiderApi.deleteRecord(module, id);
-      let derivedRecords: RecordEntry[] | null = null;
+      const current = dataRef.current;
+      const nextData: SpiderData = {
+        ...current,
+        [module]: (current[module] as Array<{ id: string }>).filter((entry) => entry.id !== id),
+        lastSyncedAt: new Date().toISOString(),
+      };
+      nextData.records = deriveRecords(nextData);
+      dataRef.current = nextData;
+      setData(nextData);
 
-      setData((current) => {
-        const nextData: SpiderData = {
-          ...current,
-          [module]: (current[module] as Array<{ id: string }>).filter((entry) => entry.id !== id),
-          lastSyncedAt: new Date().toISOString(),
-        };
-        derivedRecords = deriveRecords(nextData);
-        nextData.records = derivedRecords;
-        return nextData;
+      await queueDerivedSync(nextData.records).catch((caught) => {
+        setError(caught instanceof Error ? `Registro excluído, mas os recordes não foram sincronizados: ${caught.message}` : 'Registro excluído, mas os recordes não foram sincronizados.');
       });
-
-      if (derivedRecords) {
-        await spiderApi.replaceDerivedRecords(derivedRecords);
-      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Falha ao excluir registro.');
       throw caught;
@@ -154,11 +161,13 @@ export function useSpiderData() {
     try {
       const normalized = normalizeSettings(settings);
       const saved = await spiderApi.updateSettings(normalized);
-      setData((current) => ({
-        ...current,
+      const nextData = {
+        ...dataRef.current,
         settings: normalizeSettings(saved),
         lastSyncedAt: new Date().toISOString(),
-      }));
+      };
+      dataRef.current = nextData;
+      setData(nextData);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Falha ao salvar configurações.');
       throw caught;
@@ -168,6 +177,9 @@ export function useSpiderData() {
   }, []);
 
   const summary = useMemo(() => calculateSummary(data), [data]);
+  const dataRef = useRef(data);
+  const refreshRequestRef = useRef<Promise<void> | null>(null);
+  const derivedSyncRef = useRef<Promise<unknown>>(Promise.resolve());
 
   return {
     data,
@@ -181,6 +193,14 @@ export function useSpiderData() {
     deleteRecord,
     updateSettings,
   };
+
+  function queueDerivedSync(records: RecordEntry[]) {
+    const nextSync = derivedSyncRef.current
+      .catch(() => undefined)
+      .then(() => spiderApi.replaceDerivedRecords(records));
+    derivedSyncRef.current = nextSync.catch(() => undefined);
+    return nextSync;
+  }
 }
 
 function upsertById<T extends { id: string }>(records: T[], record: T) {

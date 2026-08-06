@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileJson, FileText, Medal, Settings as SettingsIcon } from 'lucide-react';
 import { SpiderCharts } from '../charts/SpiderCharts';
 import { Button } from '../ui/Button';
@@ -238,9 +238,17 @@ export function SettingsView({
 }) {
   const [form, setForm] = useState(settings);
 
+  useEffect(() => {
+    setForm(settings);
+  }, [settings]);
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    await onSave(form);
+    try {
+      await onSave(form);
+    } catch {
+      // O erro já é exibido pelo AppShell; manter os dados digitados permite corrigir e tentar novamente.
+    }
   }
 
   return (
@@ -264,6 +272,7 @@ export function SettingsView({
             <NumberField label="XP água" value={form.xpWater} onChange={(value) => setForm({ ...form, xpWater: value })} />
             <NumberField label="XP peso" value={form.xpWeight} onChange={(value) => setForm({ ...form, xpWeight: value })} />
             <NumberField label="XP sequência" value={form.xpStreak} onChange={(value) => setForm({ ...form, xpStreak: value })} />
+            <NumberField label="XP missão" value={form.xpMission} onChange={(value) => setForm({ ...form, xpMission: value })} />
           </div>
           <Button type="submit" loading={saving}>
             <SettingsIcon className="h-4 w-4" />

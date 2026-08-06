@@ -1,23 +1,65 @@
 /* =========================================================
-   Projeto Spider — script.js
-   App pessoal de evolução física (vanilla JS)
-   Persistência: Google Apps Script (opcional) + localStorage
+   Projeto Spider - app pessoal de evolucao fisica
+   Persistencia: Google Apps Script + fallback offline em localStorage
    ========================================================= */
 
-/* ---------- 1. Configuração inicial ---------- */
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwlCmNouFIy1GJeyZycaqIGM6HvKMc3QAPWC1CTbtyTc2EPQ36QDBDEFdAd_31RpzLKnw/exec';
 
+const STORAGE_KEYS = {
+  session: 'spider_session',
+  users: 'spider_users',
+  theme: 'spider_theme',
+  snapshot: 'spider_data',
+  pendingSync: 'spider_pending_sync',
+  apiUrl: 'spider_api_url',
+  aguaMeta: 'spider_agua_meta',
+  pesoMeta: 'spider_peso_meta',
+  xpTreino: 'spider_xp_treino',
+  xpCorrida: 'spider_xp_corrida',
+  xpNutricao: 'spider_xp_nutricao',
+  xpAgua: 'spider_xp_agua',
+  xpPeso: 'spider_xp_peso',
+  xpStreak: 'spider_xp_streak',
+};
+
+const LS_KEYS = {
+  treinos: 'spider_treinos',
+  corridas: 'spider_corridas',
+  peso: 'spider_peso',
+  medidas: 'spider_medidas',
+  nutricao: 'spider_nutricao',
+  agua: 'spider_agua',
+  scoreHistory: 'spider_score_history',
+  missions: 'spider_missions',
+};
+
+const CATEGORIES = ['treinos', 'corridas', 'peso', 'medidas', 'nutricao', 'agua'];
+
+const SHEETS = {
+  treinos: 'Treinos',
+  corridas: 'Corridas',
+  peso: 'Peso',
+  medidas: 'Medidas',
+  nutricao: 'Nutrição',
+  agua: 'Água',
+};
+
+const LEGACY_SHEETS = {
+  nutricao: 'NutriÃ§Ã£o',
+  agua: 'Ãgua',
+};
+
 const CONFIG = {
-  apiUrl: localStorage.getItem('spider_api_url') || DEFAULT_API_URL,
-  aguaMeta: Number(localStorage.getItem('spider_agua_meta')) || 2500,
-  pesoMeta: Number(localStorage.getItem('spider_peso_meta')) || 0,
+  apiUrl: localStorage.getItem(STORAGE_KEYS.apiUrl) || DEFAULT_API_URL,
+  aguaMeta: readStoredNumber(STORAGE_KEYS.aguaMeta, 2500),
+  pesoMeta: readStoredNumber(STORAGE_KEYS.pesoMeta, 0),
   xp: {
-    treino: Number(localStorage.getItem('spider_xp_treino')) || 100,
-    corrida: Number(localStorage.getItem('spider_xp_corrida')) || 120,
-    nutricao: Number(localStorage.getItem('spider_xp_nutricao')) || 20,
-    agua: Number(localStorage.getItem('spider_xp_agua')) || 10,
-    peso: Number(localStorage.getItem('spider_xp_peso')) || 15,
-    streak: Number(localStorage.getItem('spider_xp_streak')) || 50,
+    treino: readStoredNumber(STORAGE_KEYS.xpTreino, 100),
+    corrida: readStoredNumber(STORAGE_KEYS.xpCorrida, 120),
+    nutricao: readStoredNumber(STORAGE_KEYS.xpNutricao, 20),
+    agua: readStoredNumber(STORAGE_KEYS.xpAgua, 10),
+    peso: readStoredNumber(STORAGE_KEYS.xpPeso, 15),
+    streak: readStoredNumber(STORAGE_KEYS.xpStreak, 50),
   },
 };
 
@@ -49,20 +91,28 @@ const PAGE_EYEBROWS = {
   configuracoes: 'Sistema',
 };
 
-const TREINO_TIPOS = ['Musculação', 'Funcional', 'Calistenia', 'Outro'];
-const REFEICAO_TIPOS = ['Café da manhã', 'Almoço', 'Lanche', 'Jantar', 'Ceia', 'Outro'];
-
 const MISSIONS = [
-  { key: 'treino', icon: 'icon-treino', title: 'Registrar treino', xp: 100 },
-  { key: 'corrida', icon: 'icon-corrida', title: 'Registrar corrida', xp: 120 },
-  { key: 'nutricao', icon: 'icon-nutricao', title: 'Registrar alimentação', xp: 20 },
-  { key: 'agua', icon: 'icon-agua', title: 'Bater meta de água', xp: 10 },
-  { key: 'peso', icon: 'icon-peso', title: 'Registrar peso', xp: 15 },
-  { key: 'streak', icon: 'icon-timeline', title: 'Sequência mantida', xp: 50 },
-  { key: 'medidas', icon: 'icon-medidas', title: 'Registrar medidas', xp: 30 },
+  { key: 'treino', icon: 'icon-treino', title: 'Registrar treino', xp: 100, description: 'Treino salvo hoje' },
+  { key: 'corrida', icon: 'icon-corrida', title: 'Registrar corrida', xp: 120, description: 'Corrida salva hoje' },
+  { key: 'nutricao', icon: 'icon-nutricao', title: 'Registrar alimentação', xp: 20, description: 'Refeição salva hoje' },
+  { key: 'agua', icon: 'icon-agua', title: 'Bater meta de água', xp: 10, description: 'Meta de hidratação do dia' },
+  { key: 'peso', icon: 'icon-peso', title: 'Registrar peso', xp: 15, description: 'Peso salvo hoje' },
+  { key: 'streak', icon: 'icon-timeline', title: 'Sequência mantida', xp: 50, description: 'Registros em dias consecutivos' },
+  { key: 'medidas', icon: 'icon-medidas', title: 'Registrar medidas', xp: 30, description: 'Medida salva nos últimos 7 dias' },
 ];
 
-/* ---------- Estado ---------- */
+const MEASURE_FIELDS = [
+  ['leftArmCm', 'Braço esquerdo'],
+  ['rightArmCm', 'Braço direito'],
+  ['chestCm', 'Peitoral'],
+  ['waistCm', 'Cintura'],
+  ['hipCm', 'Quadril'],
+  ['thighCm', 'Coxa'],
+  ['calfCm', 'Panturrilha'],
+  ['neckCm', 'Pescoço'],
+  ['forearmCm', 'Antebraço'],
+];
+
 let state = {
   user: null,
   currentPage: 'dashboard',
@@ -74,158 +124,224 @@ let state = {
   agua: [],
   scoreHistory: [],
   missions: [],
+  pendingSync: [],
   xpTotal: 0,
   lastRefresh: null,
-  charts: {},
+  charts: {
+    score: null,
+    peso: null,
+  },
 };
 
-/* ---------- Utilidades ---------- */
 const $ = (id) => document.getElementById(id);
-const todayStr = () => {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
-};
-function toISODate(dateStr) {
-  if (!dateStr) return '';
-  return dateStr;
-}
-function uid(prefix) {
-  return (prefix || 'id') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"');
-}
-function formatDatePt(dateStr) {
-  if (!dateStr) return '';
-  const [y, m, d] = dateStr.split('-');
-  if (!y || !m || !d) return dateStr;
-  const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-  return `${Number(d)} ${months[Number(m) - 1]} ${y}`;
-}
-function formatHour(hhmm) {
-  return hhmm || '';
-}
-function weekStart(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const day = (d.getDay() + 6) % 7; // segunda = 0
-  d.setDate(d.getDate() - day);
-  return d.toISOString().slice(0, 10);
-}
-function todayKey() { return todayStr(); }
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-/* ---------- Persistência local (fallback) ---------- */
-const LS_KEYS = {
-  treinos: 'spider_treinos',
-  corridas: 'spider_corridas',
-  peso: 'spider_peso',
-  medidas: 'spider_medidas',
-  nutricao: 'spider_nutricao',
-  agua: 'spider_agua',
-  xp: 'spider_xp_total',
-  score: 'spider_score_history',
-  missions: 'spider_missions',
-};
-function loadLocal(key, fallback) {
-  try {
-    const raw = localStorage.getItem(LS_KEYS[key]);
-    return raw ? JSON.parse(raw) : (fallback || (Array.isArray(fallback) ? [] : 0));
-  } catch (e) {
-    return fallback || [];
-  }
-}
-function saveLocal(key, value) {
-  localStorage.setItem(LS_KEYS[key], JSON.stringify(value));
+function readStoredNumber(key, fallback) {
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback;
   try {
     return JSON.parse(value);
-  } catch (error) {
+  } catch {
     return fallback;
   }
 }
 
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function uid(prefix = 'id') {
+  if (window.crypto?.randomUUID) return `${prefix}_${window.crypto.randomUUID()}`;
+  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function toNumber(value, fallback = 0) {
+  const numeric = Number(String(value ?? '').replace(',', '.'));
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeDate(value) {
+  if (!value) return todayStr();
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? todayStr() : parsed.toISOString().slice(0, 10);
+}
+
+function formatDatePt(dateStr) {
+  if (!dateStr) return '-';
+  const [year, month, day] = String(dateStr).slice(0, 10).split('-');
+  if (!year || !month || !day) return String(dateStr);
+  const date = new Date(`${year}-${month}-${day}T00:00:00`);
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return formatDatePt(value);
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function daysAgoISO(days) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
+function weekStart(dateStr = todayStr()) {
+  const date = new Date(`${dateStr}T00:00:00`);
+  const day = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - day);
+  return date.toISOString().slice(0, 10);
+}
+
 function getInitials(value) {
-  const source = String(value || '').trim();
-  if (!source) return 'SP';
-  const parts = source.split(/\s+/).filter(Boolean);
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return 'SP';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
+function setText(id, value) {
+  const element = $(id);
+  if (element) element.textContent = value;
+}
+
+function setInputValue(id, value) {
+  const element = $(id);
+  if (element) element.value = value;
+}
+
+function showToast(message, type = 'success') {
+  const region = $('toastRegion');
+  if (!region) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  region.appendChild(toast);
+
+  window.setTimeout(() => {
+    toast.classList.add('leaving');
+    window.setTimeout(() => toast.remove(), 260);
+  }, 2600);
+}
+
+function setLoading(isLoading) {
+  const loading = $('loadingState');
+  if (loading) loading.style.display = isLoading ? 'flex' : 'none';
+}
+
 function ensureDefaultUsers() {
-  const storedUsers = safeParseJSON(localStorage.getItem('spider_users'), []);
+  const storedUsers = safeParseJSON(localStorage.getItem(STORAGE_KEYS.users), []);
   if (Array.isArray(storedUsers) && storedUsers.length) return storedUsers;
 
   const defaultUsers = [{ username: 'admin', password: '123456', name: 'Administrador', role: 'admin' }];
-  localStorage.setItem('spider_users', JSON.stringify(defaultUsers));
+  localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(defaultUsers));
   return defaultUsers;
 }
 
 function getStoredSession() {
-  return localStorage.getItem('spider_session');
+  return safeParseJSON(localStorage.getItem(STORAGE_KEYS.session), null);
 }
 
 function setStoredSession(user) {
-  localStorage.setItem('spider_session', JSON.stringify(user));
+  localStorage.setItem(STORAGE_KEYS.session, JSON.stringify(user));
 }
 
 function clearStoredSession() {
-  localStorage.removeItem('spider_session');
+  localStorage.removeItem(STORAGE_KEYS.session);
 }
 
-function setLoading(isLoading) {
-  const loading = document.getElementById('loadingState');
-  if (loading) loading.style.display = isLoading ? 'flex' : 'none';
+function hasApi() {
+  try {
+    const url = new URL(CONFIG.apiUrl);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
-function showToast(message, type = 'info') {
-  const region = document.getElementById('toastRegion');
-  if (!region) return;
+async function apiGet(action) {
+  const url = new URL(CONFIG.apiUrl);
+  url.searchParams.set('action', action);
 
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  region.appendChild(toast);
-  requestAnimationFrame(() => toast.classList.add('is-visible'));
-
-  window.setTimeout(() => {
-    toast.classList.remove('is-visible');
-    window.setTimeout(() => toast.remove(), 220);
-  }, 2200);
-}
-
-function navigateTo(page) {
-  state.currentPage = page;
-
-  document.querySelectorAll('.nav-item').forEach((btn) => {
-    btn.classList.toggle('is-active', btn.dataset.page === page);
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    redirect: 'follow',
   });
 
-  document.querySelectorAll('.page').forEach((panel) => {
-    panel.classList.toggle('is-active', panel.dataset.pagePanel === page);
-  });
-
-  const title = document.getElementById('pageTitle');
-  const eyebrow = document.getElementById('pageEyebrow');
-  if (title) title.textContent = PAGE_TITLES[page] || 'Dashboard';
-  if (eyebrow) eyebrow.textContent = PAGE_EYEBROWS[page] || 'Visão geral';
+  return parseApiResponse(response);
 }
 
-function renderPage(page) {
-  navigateTo(page);
+async function apiPost(action, payload = {}) {
+  const url = new URL(CONFIG.apiUrl);
+  url.searchParams.set('action', action);
+
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    redirect: 'follow',
+    body: JSON.stringify({ action, ...payload }),
+  });
+
+  return parseApiResponse(response);
+}
+
+async function parseApiResponse(response) {
+  const raw = await response.text();
+
+  if (!response.ok) {
+    throw new Error(raw || `Falha na requisição (${response.status})`);
+  }
+
+  let parsed;
+  try {
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    const cleaned = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    throw new Error(cleaned || 'Resposta inválida do Apps Script.');
+  }
+
+  if (parsed && parsed.ok === false) {
+    throw new Error(parsed.error || 'Falha ao comunicar com a planilha.');
+  }
+
+  return Object.prototype.hasOwnProperty.call(parsed, 'data') ? parsed.data : parsed;
 }
 
 async function authenticateUser(username, password) {
-  const localUsers = ensureDefaultUsers();
-  const localUser = localUsers.find((user) => user.username === username && user.password === password);
+  const cleanUsername = String(username || '').trim();
+  const cleanPassword = String(password || '');
+
+  const localUser = ensureDefaultUsers().find(
+    (user) => user.username.toLowerCase() === cleanUsername.toLowerCase() && user.password === cleanPassword,
+  );
+
   if (localUser) {
     return {
       username: localUser.username,
@@ -235,229 +351,632 @@ async function authenticateUser(username, password) {
     };
   }
 
-  if (CONFIG.apiUrl) {
-    try {
-      const res = await apiPost({ action: 'login', username, password });
-      if (res && res.ok !== false && res.data && res.data.user) {
-        return {
-          username: res.data.user.username || username,
-          name: res.data.user.name || res.data.user.username || username,
-          initials: getInitials(res.data.user.name || res.data.user.username || username),
-          role: res.data.user.role || 'user',
-        };
-      }
-    } catch (error) {
-      console.warn('Falha no login via Apps Script:', error);
-    }
+  if (!hasApi()) return null;
+
+  try {
+    const data = await apiPost('login', { username: cleanUsername, password: cleanPassword });
+    const user = data?.user;
+    if (!user) return null;
+
+    return {
+      username: user.username || cleanUsername,
+      name: user.name || user.username || cleanUsername,
+      initials: getInitials(user.name || user.username || cleanUsername),
+      role: user.role || 'user',
+    };
+  } catch (error) {
+    console.warn('Falha no login via Apps Script:', error);
+    return null;
   }
-
-  return null;
 }
 
-/* ---------- 5. API (Google Apps Script) ---------- */
-async function apiGet(action) {
-  const res = await fetch(`${CONFIG.apiUrl}?action=${action}`);
-  return res.json();
+function normalizeRecords(category, records) {
+  if (!Array.isArray(records)) return [];
+  return records.map((record) => normalizeRecord(category, record)).sort(sortByDateDesc);
 }
-async function apiPost(payload) {
-  const res = await fetch(CONFIG.apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+
+function normalizeRecord(category, record) {
+  const normalizers = {
+    treinos: normalizeWorkout,
+    corridas: normalizeRun,
+    peso: normalizeWeight,
+    medidas: normalizeMeasurement,
+    nutricao: normalizeNutrition,
+    agua: normalizeWater,
+  };
+
+  return normalizers[category](record || {});
+}
+
+function normalizeBase(record, prefix) {
+  const now = nowIso();
+  return {
+    id: String(record.id || uid(prefix)),
+    date: normalizeDate(record.date || record.data),
+    createdAt: record.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function normalizeWorkout(record) {
+  const base = normalizeBase(record, 'treino');
+  return {
+    ...base,
+    type: String(record.type || record.tipo || 'Outro').trim() || 'Outro',
+    durationMinutes: toNumber(record.durationMinutes ?? record.duracao, 0),
+    exercises: Array.isArray(record.exercises)
+      ? record.exercises.map(normalizeExercise)
+      : parseExerciseText(record.exercises || record.exercicios || ''),
+    notes: String(record.notes || record.observacoes || ''),
+    status: record.status || 'Concluído',
+  };
+}
+
+function normalizeExercise(exercise) {
+  return {
+    id: String(exercise.id || uid('exercicio')),
+    name: String(exercise.name || exercise.nome || '').trim(),
+    sets: toNumber(exercise.sets ?? exercise.series, 0),
+    reps: toNumber(exercise.reps ?? exercise.repeticoes, 0),
+    loadKg: toNumber(exercise.loadKg ?? exercise.carga, 0),
+    durationSeconds: toNumber(exercise.durationSeconds ?? exercise.duracaoSegundos, 0),
+    notes: String(exercise.notes || exercise.observacoes || ''),
+  };
+}
+
+function parseExerciseText(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [namePart, setsPart = '', loadPart = ''] = line.split('|').map((part) => part.trim());
+      const match = setsPart.match(/(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)/i);
+      const durationMatch = setsPart.match(/(\d+)\s*s(?:eg)?/i);
+      const loadMatch = loadPart.match(/(\d+(?:[.,]\d+)?)/);
+
+      return normalizeExercise({
+        name: namePart || line,
+        sets: match ? match[1] : 1,
+        reps: match ? match[2] : 0,
+        loadKg: loadMatch ? loadMatch[1] : 0,
+        durationSeconds: durationMatch ? durationMatch[1] : 0,
+        notes: [setsPart && !match ? setsPart : '', loadPart && !loadMatch ? loadPart : ''].filter(Boolean).join(' · '),
+      });
+    });
+}
+
+function normalizeRun(record) {
+  const base = normalizeBase(record, 'corrida');
+  const durationMinutes = toNumber(record.durationMinutes ?? record.duracao, parseDurationToMinutes(record.tempo));
+  const distanceKm = toNumber(record.distanceKm ?? record.distancia, 0);
+
+  return {
+    ...base,
+    distanceKm,
+    durationMinutes,
+    pace: String(record.pace || calculatePace(distanceKm, durationMinutes) || ''),
+    elevationM: toNumber(record.elevationM ?? record.elevacao, 0),
+    location: String(record.location || record.local || ''),
+    temperatureC: toNumber(record.temperatureC ?? record.temperatura, 0),
+    feeling: String(record.feeling || record.sensacao || ''),
+    notes: String(record.notes || record.observacoes || ''),
+    stravaUrl: String(record.stravaUrl || record.linkStrava || ''),
+  };
+}
+
+function normalizeWeight(record) {
+  return {
+    ...normalizeBase(record, 'peso'),
+    weightKg: toNumber(record.weightKg ?? record.peso, 0),
+    notes: String(record.notes || record.observacoes || ''),
+  };
+}
+
+function normalizeMeasurement(record) {
+  return {
+    ...normalizeBase(record, 'medida'),
+    leftArmCm: toNumber(record.leftArmCm ?? record.bracoEsq, 0),
+    rightArmCm: toNumber(record.rightArmCm ?? record.bracoDir, 0),
+    chestCm: toNumber(record.chestCm ?? record.peitoral, 0),
+    waistCm: toNumber(record.waistCm ?? record.cintura, 0),
+    hipCm: toNumber(record.hipCm ?? record.quadril, 0),
+    thighCm: toNumber(record.thighCm ?? record.coxa, 0),
+    calfCm: toNumber(record.calfCm ?? record.panturrilha, 0),
+    neckCm: toNumber(record.neckCm ?? record.pescoco, 0),
+    forearmCm: toNumber(record.forearmCm ?? record.antebraco, 0),
+    notes: String(record.notes || record.observacoes || ''),
+  };
+}
+
+function normalizeNutrition(record) {
+  return {
+    ...normalizeBase(record, 'refeicao'),
+    time: String(record.time || record.horario || record.hora || ''),
+    type: String(record.type || record.tipo || 'Outro'),
+    foods: Array.isArray(record.foods)
+      ? record.foods.map(normalizeFood)
+      : parseFoodText(record.foods || record.alimentos || ''),
+    notes: String(record.notes || record.observacoes || ''),
+  };
+}
+
+function normalizeFood(food) {
+  return {
+    id: String(food.id || uid('alimento')),
+    name: String(food.name || food.nome || '').trim(),
+    quantity: toNumber(food.quantity ?? food.quantidade, 1),
+    unit: String(food.unit || food.unidade || 'porção'),
+  };
+}
+
+function parseFoodText(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+(?:[.,]\d+)?)\s*([a-zA-ZÀ-ÿ]+)?\s+(.+)$/);
+      if (!match) return normalizeFood({ name: line, quantity: 1, unit: 'porção' });
+      return normalizeFood({ quantity: match[1], unit: match[2] || 'un', name: match[3] });
+    });
+}
+
+function normalizeWater(record) {
+  return {
+    ...normalizeBase(record, 'agua'),
+    amountMl: toNumber(record.amountMl ?? record.quantidade ?? record.ml, 0),
+    notes: String(record.notes || record.observacoes || ''),
+  };
+}
+
+function sortByDateDesc(a, b) {
+  return String(b.date || b.createdAt || '').localeCompare(String(a.date || a.createdAt || ''));
+}
+
+function upsertLocal(category, record) {
+  const normalized = normalizeRecord(category, record);
+  const list = state[category].filter((item) => item.id !== normalized.id);
+  state[category] = [normalized, ...list].sort(sortByDateDesc);
+  persistAll();
+  return normalized;
+}
+
+function removeLocal(category, id) {
+  state[category] = state[category].filter((item) => item.id !== id);
+  persistAll();
+}
+
+function loadLocalState() {
+  const snapshot = safeParseJSON(localStorage.getItem(STORAGE_KEYS.snapshot), {});
+
+  CATEGORIES.forEach((category) => {
+    const stored = safeParseJSON(localStorage.getItem(LS_KEYS[category]), null);
+    const legacyKey = category === 'nutricao' ? 'refeicoes' : category;
+    const source = Array.isArray(stored) ? stored : snapshot?.[category] || snapshot?.[legacyKey] || [];
+    state[category] = normalizeRecords(category, source);
   });
-  return res.json();
+
+  state.scoreHistory = normalizeScoreHistory(
+    safeParseJSON(localStorage.getItem(LS_KEYS.scoreHistory), snapshot?.scoreHistory || []),
+  );
+  state.missions = safeParseJSON(localStorage.getItem(LS_KEYS.missions), []);
+  state.pendingSync = safeParseJSON(localStorage.getItem(STORAGE_KEYS.pendingSync), []);
+  state.xpTotal = calculateXpTotal();
 }
 
-const hasApi = () => !!CONFIG.apiUrl;
+function persistAll() {
+  CATEGORIES.forEach((category) => {
+    localStorage.setItem(LS_KEYS[category], JSON.stringify(state[category]));
+  });
 
-async function loadAll() {
-  // Sempre carrega do local primeiro (base offline)
-  state.treinos = loadLocal('treinos', []);
-  state.corridas = loadLocal('corridas', []);
-  state.peso = loadLocal('peso', []);
-  state.medidas = loadLocal('medidas', []);
-  state.nutricao = loadLocal('nutricao', []);
-  state.agua = loadLocal('agua', []);
-  state.xpTotal = loadLocal('xp', 0);
-  state.scoreHistory = loadLocal('score', []);
-  state.missions = loadLocal('missions', []);
+  localStorage.setItem(LS_KEYS.scoreHistory, JSON.stringify(state.scoreHistory));
+  localStorage.setItem(LS_KEYS.missions, JSON.stringify(state.missions));
+  localStorage.setItem(STORAGE_KEYS.pendingSync, JSON.stringify(state.pendingSync));
+  localStorage.setItem(
+    STORAGE_KEYS.snapshot,
+    JSON.stringify({
+      treinos: state.treinos,
+      corridas: state.corridas,
+      peso: state.peso,
+      medidas: state.medidas,
+      nutricao: state.nutricao,
+      agua: state.agua,
+      scoreHistory: state.scoreHistory,
+      updatedAt: nowIso(),
+    }),
+  );
+}
 
-  // Se houver API, tenta carregar do servidor
-  if (hasApi()) {
+function normalizeScoreHistory(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => ({
+      date: normalizeDate(entry.date || entry.data),
+      score: Math.max(0, Math.min(100, Math.round(toNumber(entry.score, 0)))),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-30);
+}
+
+async function fetchRemoteData() {
+  try {
+    return await apiGet('bootstrap');
+  } catch (bootstrapError) {
     try {
-      const res = await apiGet('getAll');
-      if (res && res.ok !== false && res.data) {
-        const d = res.data;
-        state.treinos = d.treinos || d.workouts || state.treinos;
-        state.corridas = d.corridas || d.runs || state.corridas;
-        state.peso = d.peso || d.weight || state.peso;
-        state.medidas = d.medidas || d.measurements || state.medidas;
-        state.nutricao = d.nutricao || d.nutrition || state.nutricao;
-        state.agua = d.agua || d.water || state.agua;
-        if (d.xpTotal !== undefined) state.xpTotal = Number(d.xpTotal) || 0;
-        if (d.scoreHistory) state.scoreHistory = d.scoreHistory;
-        if (d.missions) state.missions = d.missions;
-        // persistir local
-        Object.keys(LS_KEYS).forEach((k) => {
-          if (state[k] !== undefined) saveLocal(k, state[k]);
-        });
-      }
-    } catch (e) {
-      console.warn('Falha ao sincronizar com API:', e);
+      return await apiGet('getAll');
+    } catch {
+      throw bootstrapError;
     }
   }
+}
 
-  state.lastRefresh = new Date();
+function applyRemoteData(remoteData) {
+  if (!remoteData || typeof remoteData !== 'object') return;
+
+  const map = {
+    treinos: remoteData.treinos || remoteData.workouts,
+    corridas: remoteData.corridas || remoteData.runs,
+    peso: remoteData.peso || remoteData.weight,
+    medidas: remoteData.medidas || remoteData.measurements,
+    nutricao: remoteData.nutricao || remoteData.nutrition,
+    agua: remoteData.agua || remoteData.water,
+  };
+
+  CATEGORIES.forEach((category) => {
+    if (Array.isArray(map[category])) state[category] = normalizeRecords(category, map[category]);
+  });
+
+  if (Array.isArray(remoteData.scoreHistory)) {
+    state.scoreHistory = normalizeScoreHistory(remoteData.scoreHistory);
+  }
+
+  applyRemoteSettings(remoteData.settings);
+  state.lastRefresh = remoteData.lastSyncedAt ? new Date(remoteData.lastSyncedAt) : new Date();
+  state.xpTotal = calculateXpTotal();
+  persistAll();
+}
+
+function applyRemoteSettings(settings) {
+  if (!settings || hasLocalSettings()) return;
+
+  CONFIG.aguaMeta = toNumber(settings.dailyWaterGoalMl, CONFIG.aguaMeta);
+  CONFIG.pesoMeta = toNumber(settings.targetWeightKg, CONFIG.pesoMeta);
+  CONFIG.xp.treino = toNumber(settings.xpWorkout, CONFIG.xp.treino);
+  CONFIG.xp.corrida = toNumber(settings.xpRun, CONFIG.xp.corrida);
+  CONFIG.xp.nutricao = toNumber(settings.xpNutrition, CONFIG.xp.nutricao);
+  CONFIG.xp.agua = toNumber(settings.xpWater, CONFIG.xp.agua);
+  CONFIG.xp.peso = toNumber(settings.xpWeight, CONFIG.xp.peso);
+  CONFIG.xp.streak = toNumber(settings.xpStreak, CONFIG.xp.streak);
+  persistSettingsLocal();
+}
+
+function hasLocalSettings() {
+  return [
+    STORAGE_KEYS.aguaMeta,
+    STORAGE_KEYS.pesoMeta,
+    STORAGE_KEYS.xpTreino,
+    STORAGE_KEYS.xpCorrida,
+    STORAGE_KEYS.xpNutricao,
+    STORAGE_KEYS.xpAgua,
+    STORAGE_KEYS.xpPeso,
+    STORAGE_KEYS.xpStreak,
+  ].some((key) => localStorage.getItem(key) !== null);
+}
+
+async function loadAll({ silent = false } = {}) {
+  setLoading(true);
+  loadLocalState();
   ensureMissions();
-  updateXPUI();
+  renderAll();
+
+  if (!hasApi()) {
+    setLoading(false);
+    if (!silent) showToast('Usando somente salvamento local. Configure a URL do Apps Script para sincronizar.', 'warning');
+    return;
+  }
+
+  try {
+    const remoteData = await fetchRemoteData();
+    applyRemoteData(remoteData);
+    await flushPendingSync();
+    state.lastRefresh = new Date();
+    ensureMissions();
+    recordScoreHistory();
+    persistAll();
+    renderAll();
+    if (!silent) showToast('Dados sincronizados com a planilha.', 'success');
+  } catch (error) {
+    console.warn('Falha ao sincronizar com API:', error);
+    if (!silent) showToast('Não consegui sincronizar agora. Seus dados locais continuam salvos.', 'warning');
+  } finally {
+    setLoading(false);
+  }
 }
 
 async function saveRecord(category, record) {
-  const normalized = {
-    ...record,
-    id: record.id || uid(category),
-    date: record.date || record.data || todayStr(),
-    createdAt: record.createdAt || new Date().toISOString(),
-    updatedAt: record.updatedAt || new Date().toISOString(),
+  const normalized = upsertLocal(category, record);
+  ensureMissions();
+  recordScoreHistory();
+  renderAll();
+
+  if (!hasApi()) {
+    queuePendingSync({ action: 'upsert', category, record: normalized });
+    showToast('Registro salvo localmente. Configure a URL do Apps Script para sincronizar.', 'warning');
+    return normalized;
+  }
+
+  try {
+    const saved = await syncUpsert(category, normalized);
+    upsertLocal(category, saved);
+    await flushPendingSync();
+    ensureMissions();
+    renderAll();
+    showToast('Registro salvo na planilha.', 'success');
+    return saved;
+  } catch (error) {
+    console.warn('Falha ao salvar na API:', error);
+    queuePendingSync({ action: 'upsert', category, record: normalized });
+    showToast('Registro salvo localmente. A sincronização ficou pendente.', 'warning');
+    return normalized;
+  }
+}
+
+async function deleteRecord(category, id) {
+  removeLocal(category, id);
+  ensureMissions();
+  recordScoreHistory();
+  renderAll();
+
+  if (!hasApi()) {
+    queuePendingSync({ action: 'delete', category, id });
+    showToast('Registro removido localmente. Exclusão pendente na planilha.', 'warning');
+    return;
+  }
+
+  try {
+    await syncDelete(category, id);
+    await flushPendingSync();
+    showToast('Registro excluído.', 'success');
+  } catch (error) {
+    console.warn('Falha ao excluir na API:', error);
+    queuePendingSync({ action: 'delete', category, id });
+    showToast('Registro excluído localmente. Sincronização pendente.', 'warning');
+  }
+}
+
+async function syncUpsert(category, record) {
+  try {
+    return normalizeRecord(category, await apiPost('upsert', { sheet: SHEETS[category], record }));
+  } catch (error) {
+    if (!LEGACY_SHEETS[category]) throw error;
+    return normalizeRecord(category, await apiPost('upsert', { sheet: LEGACY_SHEETS[category], record }));
+  }
+}
+
+async function syncDelete(category, id) {
+  try {
+    return await apiPost('delete', { sheet: SHEETS[category], id });
+  } catch (error) {
+    if (!LEGACY_SHEETS[category]) throw error;
+    return apiPost('delete', { sheet: LEGACY_SHEETS[category], id });
+  }
+}
+
+function queuePendingSync(item) {
+  const syncItem = {
+    id: item.id || `${item.action}:${item.category}:${item.record?.id || item.id || uid('sync')}`,
+    createdAt: nowIso(),
+    ...item,
   };
 
-  state[category] = [...state[category], normalized]
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  saveLocal(category, state[category]);
+  state.pendingSync = state.pendingSync.filter((pending) => {
+    const sameRecord = pending.category === syncItem.category && (pending.record?.id || pending.id) === (syncItem.record?.id || syncItem.id);
+    return !(sameRecord && pending.action === syncItem.action);
+  });
+  state.pendingSync.push(syncItem);
+  persistAll();
+}
 
-  if (hasApi()) {
+async function flushPendingSync() {
+  if (!hasApi() || !state.pendingSync.length) return;
+
+  const remaining = [];
+
+  for (const item of state.pendingSync) {
     try {
-      await apiPost({ action: 'upsert', sheet: getSheetNameForCategory(category), record: normalized });
+      if (item.action === 'upsert') {
+        const saved = await syncUpsert(item.category, item.record);
+        upsertLocal(item.category, saved);
+      } else if (item.action === 'delete') {
+        await syncDelete(item.category, item.id);
+      }
     } catch (error) {
-      console.warn('Falha ao salvar na API:', error);
-      showToast('Registro salvo localmente. A sincronização com o Google Sheets falhou.', 'warning');
+      console.warn('Sincronização pendente falhou:', error);
+      remaining.push(item);
     }
   }
+
+  state.pendingSync = remaining;
+  persistAll();
 }
 
-function getSheetNameForCategory(category) {
-  const mapping = {
-    treinos: 'Treinos',
-    corridas: 'Corridas',
-    peso: 'Peso',
-    medidas: 'Medidas',
-    nutricao: 'Nutrição',
-    agua: 'Água',
-  };
-  return mapping[category] || 'Diário';
+function parseDurationToMinutes(value) {
+  if (!value) return 0;
+  const parts = String(value).split(':').map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) return toNumber(value, 0);
+  if (parts.length === 3) return Math.round(((parts[0] * 3600 + parts[1] * 60 + parts[2]) / 60) * 10) / 10;
+  if (parts.length === 2) return Math.round((parts[0] + parts[1] / 60) * 10) / 10;
+  return toNumber(value, 0);
 }
 
-function cap(str) {
-  return str.charAt(0).toUpperCase() + str.slice(1);
+function calculatePace(distanceKm, durationMinutes) {
+  if (!distanceKm || !durationMinutes) return '';
+  const secondsPerKm = Math.round((durationMinutes * 60) / distanceKm);
+  const minutes = Math.floor(secondsPerKm / 60);
+  const seconds = String(secondsPerKm % 60).padStart(2, '0');
+  return `${minutes}:${seconds}/km`;
 }
 
-/* ---------- 4. Sistema de XP e Nível ---------- */
-function addXP(amount) {
-  state.xpTotal += amount;
-  saveLocal('xp', state.xpTotal);
-  updateXPUI();
-  showToast(`+${amount} XP`, 'xp');
+function updatePacePreview() {
+  const distance = toNumber($('corridaDistancia')?.value, 0);
+  const duration = parseDurationToMinutes($('corridaTempo')?.value);
+  setInputValue('corridaPace', calculatePace(distance, duration));
 }
 
-function getLevel() { return Math.floor(state.xpTotal / 500) + 1; }
-function xpToNext() { return 500 - (state.xpTotal % 500); }
-function xpBarPct() { return ((state.xpTotal % 500) / 500) * 100; }
-
-function updateXpUI() {
-  const sidebarXP = $('sidebarXP');
-  const sidebarXPBar = $('sidebarXPBar');
-  const sidebarLevel = $('sidebarLevel');
-  const userLevel = $('userLevel');
-
-  if (sidebarXP) sidebarXP.textContent = `${state.xpTotal} XP`;
-  if (sidebarXPBar) sidebarXPBar.style.width = `${xpBarPct()}%`;
-  if (sidebarLevel) sidebarLevel.textContent = `Nível ${getLevel()}`;
-  if (userLevel) userLevel.textContent = `Nível ${getLevel()}`;
+function formatDuration(minutes) {
+  if (!minutes) return '-';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = Math.round(minutes % 60);
+  return rest ? `${hours}h ${rest}min` : `${hours}h`;
 }
 
-/* ---------- 3. Spider Score (0-100) ---------- */
+function uniqueDates(entries) {
+  return new Set(entries.map((entry) => entry.date).filter(Boolean));
+}
+
 function activeDaysLast30() {
-  const days = new Set();
   const limit = daysAgoISO(30);
-  const all = state.treinos.concat(state.corridas, state.peso, state.medidas, state.nutricao, state.agua);
-  all.forEach((r) => {
-    if (r.date && r.date >= limit) days.add(r.date);
-  });
-  return days.size;
+  return uniqueDates([...state.treinos, ...state.corridas, ...state.peso, ...state.medidas, ...state.nutricao, ...state.agua].filter((entry) => entry.date >= limit)).size;
 }
-function daysAgoISO(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+
+function calcStreak() {
+  const days = uniqueDates([...state.treinos, ...state.corridas, ...state.peso, ...state.medidas, ...state.nutricao, ...state.agua]);
+  if (!days.size) return 0;
+
+  let streak = 0;
+  const cursor = new Date();
+  if (!days.has(cursor.toISOString().slice(0, 10))) cursor.setDate(cursor.getDate() - 1);
+
+  while (days.has(cursor.toISOString().slice(0, 10))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return streak;
 }
-function treinosThisWeek() {
-  const ws = weekStart(todayStr());
-  return state.treinos.filter((t) => t.date >= ws).length;
-}
-function corridasThisMonth() {
-  const m = todayStr().slice(0, 7);
-  return state.corridas.filter((c) => c.date && c.date.slice(0, 7) === m).length;
-}
+
 function waterToday() {
-  const t = todayStr();
-  return state.agua.filter((a) => a.date === t).reduce((s, a) => s + a.amountMl, 0);
+  const today = todayStr();
+  return state.agua.filter((entry) => entry.date === today).reduce((total, entry) => total + toNumber(entry.amountMl, 0), 0);
 }
+
+function treinosThisWeek() {
+  const start = weekStart();
+  return state.treinos.filter((entry) => entry.date >= start).length;
+}
+
+function corridasThisMonth() {
+  const month = todayStr().slice(0, 7);
+  return state.corridas.filter((entry) => entry.date?.slice(0, 7) === month).length;
+}
+
 function pesoRecent7() {
   const limit = daysAgoISO(7);
-  return state.peso.some((p) => p.date >= limit);
-}
-function calcStreak() {
-  const days = new Set();
-  state.treinos.concat(state.corridas, state.peso, state.nutricao, state.agua).forEach((r) => {
-    if (r.date) days.add(r.date);
-  });
-  if (days.size === 0) return 0;
-  let streak = 0;
-  const d = new Date();
-  // se hoje não tem registro, começa de ontem
-  if (!days.has(d.toISOString().slice(0, 10))) d.setDate(d.getDate() - 1);
-  while (days.has(d.toISOString().slice(0, 10))) {
-    streak += 1;
-    d.setDate(d.getDate() - 1);
-  }
-  return streak;
+  return state.peso.some((entry) => entry.date >= limit);
 }
 
 function computeSpiderScore() {
   const consistency = Math.min(100, (activeDaysLast30() / 30) * 100);
   const treinosScore = Math.min(100, (treinosThisWeek() / 4) * 100);
   const corridasScore = Math.min(100, (corridasThisMonth() / 8) * 100);
-  const aguaScore = Math.min(100, (waterToday() / CONFIG.aguaMeta) * 100);
+  const aguaScore = Math.min(100, (waterToday() / Math.max(CONFIG.aguaMeta, 1)) * 100);
   const pesoScore = pesoRecent7() ? 100 : 0;
   const streakScore = Math.min(100, calcStreak() * 20);
 
-  const score =
-    consistency * 0.30 +
-    treinosScore * 0.20 +
-    corridasScore * 0.15 +
-    aguaScore * 0.10 +
-    pesoScore * 0.10 +
-    streakScore * 0.15;
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        consistency * 0.3 +
+          treinosScore * 0.2 +
+          corridasScore * 0.15 +
+          aguaScore * 0.1 +
+          pesoScore * 0.1 +
+          streakScore * 0.15,
+      ),
+    ),
+  );
+}
 
-  return Math.max(0, Math.min(100, Math.round(score)));
+function calculateXpTotal() {
+  return (
+    state.treinos.length * CONFIG.xp.treino +
+    state.corridas.length * CONFIG.xp.corrida +
+    uniqueDates(state.nutricao).size * CONFIG.xp.nutricao +
+    uniqueDates(state.agua).size * CONFIG.xp.agua +
+    state.peso.length * CONFIG.xp.peso +
+    calcStreak() * CONFIG.xp.streak
+  );
+}
+
+function getLevel() {
+  return Math.floor(state.xpTotal / 500) + 1;
+}
+
+function xpBarPct() {
+  return ((state.xpTotal % 500) / 500) * 100;
 }
 
 function recordScoreHistory() {
-  const today = todayStr();
+  const date = todayStr();
   const score = computeSpiderScore();
-  let history = state.scoreHistory.filter((h) => h.date !== today);
-  history.push({ date: today, score });
-  history.sort((a, b) => a.date.localeCompare(b.date));
-  history = history.slice(-30);
-  state.scoreHistory = history;
-  saveLocal('score', history);
+  state.scoreHistory = state.scoreHistory.filter((entry) => entry.date !== date);
+  state.scoreHistory.push({ date, score });
+  state.scoreHistory = normalizeScoreHistory(state.scoreHistory);
+  persistAll();
   return score;
 }
 
-function updateScoreChip(score) {
+function getDailyMissions() {
+  const today = todayStr();
+  const streak = calcStreak();
+  const hasToday = (entries) => entries.some((entry) => entry.date === today);
+  const doneMap = {
+    treino: hasToday(state.treinos),
+    corrida: hasToday(state.corridas),
+    nutricao: hasToday(state.nutricao),
+    agua: waterToday() >= CONFIG.aguaMeta,
+    peso: hasToday(state.peso),
+    streak: streak >= 2,
+    medidas: state.medidas.some((entry) => entry.date >= daysAgoISO(7)),
+  };
+
+  return MISSIONS.map((mission) => ({
+    ...mission,
+    done: Boolean(doneMap[mission.key]),
+  }));
+}
+
+function ensureMissions() {
+  state.missions = getDailyMissions().map((mission) => ({
+    key: mission.key,
+    date: todayStr(),
+    title: mission.title,
+    xp: mission.xp,
+    status: mission.done ? 'done' : 'pending',
+  }));
+  persistAll();
+}
+
+function updateXpUI() {
+  state.xpTotal = calculateXpTotal();
+  setText('sidebarXP', `${state.xpTotal} XP`);
+  setText('sidebarLevel', `Nível ${getLevel()}`);
+  setText('userLevel', `Nível ${getLevel()}`);
+
+  const bar = $('sidebarXPBar');
+  if (bar) bar.style.width = `${xpBarPct()}%`;
+}
+
+function updateScoreChip(score = computeSpiderScore()) {
   const chip = document.querySelector('.spider-score-chip');
   const el = $('topbarScore');
-  el.textContent = score;
+  if (!chip || !el) return;
+
+  el.textContent = String(score);
   chip.classList.toggle('tone-gold', score >= 40 && score <= 70);
   chip.classList.toggle('tone-mint', score > 70);
   chip.classList.remove('pulse');
@@ -465,190 +984,487 @@ function updateScoreChip(score) {
   chip.classList.add('pulse');
 }
 
-/* ---------- Missões ---------- */
-function ensureMissions() {
-  const today = todayStr();
-  const todayMissions = state.missions.filter((m) => m.date === today);
-  if (todayMissions.length === MISSIONS.length) return;
-
-  const base = state.missions.filter((m) => m.date !== today);
-  const fresh = MISSIONS.map((m) => ({
-    ...m,
-    date: today,
-    status: 'pending',
-  }));
-  state.missions = base.concat(fresh);
-  saveLocal('missions', state.missions);
-  evaluateMissions();
+function renderAll() {
+  updateXpUI();
+  const score = recordScoreHistory();
+  updateScoreChip(score);
+  renderDashboard();
+  renderCurrentPage();
+  renderConfiguracoes();
+  updateUserChip();
 }
 
-function evaluateMissions() {
-  const today = todayStr();
-  const has = (arr, fn) => arr.some(fn);
-  const stri = calcStreak();
+function navigateTo(page) {
+  state.currentPage = PAGE_TITLES[page] ? page : 'dashboard';
 
-  const conditions = {
-    treino: has(state.treinos, (t) => t.date === today),
-    corrida: has(state.corridas, (c) => c.date === today),
-    nutricao: has(state.nutricao, (n) => n.date === today),
-    agua: waterToday() >= CONFIG.aguaMeta,
-    peso: has(state.peso, (p) => p.date === today),
-    streak: stri >= 2,
-    medidas: has(state.medidas, (m) => m.date >= daysAgoISO(7)),
+  $$('.nav-item').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.page === state.currentPage);
+  });
+
+  $$('.page').forEach((panel) => {
+    panel.classList.toggle('is-active', panel.dataset.pagePanel === state.currentPage);
+  });
+
+  setText('pageTitle', PAGE_TITLES[state.currentPage] || 'Dashboard');
+  setText('pageEyebrow', PAGE_EYEBROWS[state.currentPage] || 'Visão geral');
+  $('sidebar')?.classList.remove('is-open');
+  $('sidebarScrim')?.classList.remove('is-visible');
+  renderCurrentPage();
+}
+
+function renderCurrentPage() {
+  const renderers = {
+    dashboard: renderDashboard,
+    treinos: renderTreinos,
+    corridas: renderCorridas,
+    peso: renderPeso,
+    medidas: renderMedidas,
+    nutricao: renderNutricao,
+    agua: renderAgua,
+    missoes: renderMissoes,
+    timeline: renderTimeline,
+    exportar: renderExportar,
+    configuracoes: renderConfiguracoes,
   };
 
-  state.missions.forEach((m) => {
-    return acc;
-  }, {});
-  container.innerHTML = Object.entries(groups).length ? Object.entries(groups).map(([type, items]) => `
-    <article class="item-card"><div class="surface-header"><div><strong>${type}</strong><div class="meta">${items.length} refeição(ões)</div></div><span class="badge">+${CONFIG.xp.nutricao} XP</span></div>
-    ${items.map(item => `<p class="meta">• ${item.alimentos || '—'}</p>`).join('')}
+  renderers[state.currentPage]?.();
+}
+
+function renderDashboard() {
+  const score = computeSpiderScore();
+  const currentWeight = state.peso[0]?.weightKg;
+  const water = waterToday();
+  const waterPct = Math.min(100, Math.round((water / Math.max(CONFIG.aguaMeta, 1)) * 100));
+
+  const stats = [
+    { icon: 'icon-dashboard', value: score, label: 'Spider Score', variation: score >= 70 ? 'Excelente ritmo' : 'Consistência em construção', tone: score >= 70 ? 'up' : '' },
+    { icon: 'icon-xp', value: `${state.xpTotal}`, label: `XP total · Nível ${getLevel()}`, variation: `${Math.round(xpBarPct())}% até o próximo nível`, tone: 'up' },
+    { icon: 'icon-treino', value: treinosThisWeek(), label: 'Treinos na semana', variation: 'Meta base: 4 treinos', tone: treinosThisWeek() >= 4 ? 'up' : '' },
+    { icon: 'icon-agua', value: `${waterPct}%`, label: `${water} ml de água hoje`, variation: `Meta: ${CONFIG.aguaMeta} ml`, tone: waterPct >= 100 ? 'up' : '' },
+    { icon: 'icon-peso', value: currentWeight ? `${currentWeight} kg` : '--', label: 'Peso atual', variation: CONFIG.pesoMeta ? `Meta: ${CONFIG.pesoMeta} kg` : 'Defina uma meta', tone: currentWeight ? 'up' : '' },
+  ];
+
+  const statsGrid = $('statsGrid');
+  if (statsGrid) {
+    statsGrid.innerHTML = stats.map((stat) => `
+      <article class="stat-card">
+        <div class="stat-icon">${icon(stat.icon)}</div>
+        <div class="stat-value">${escapeHtml(stat.value)}</div>
+        <div class="stat-label">${escapeHtml(stat.label)}</div>
+        <div class="stat-variation ${stat.tone}">${escapeHtml(stat.variation)}</div>
+      </article>
+    `).join('');
+  }
+
+  setText('lastRefresh', state.lastRefresh ? `Atualizado ${formatDateTime(state.lastRefresh)}` : 'Dados locais carregados');
+  renderScoreChart();
+  renderDashboardMissions();
+  renderDashboardTimeline();
+}
+
+function renderDashboardMissions() {
+  const container = $('dashMissoes');
+  if (!container) return;
+  const missions = getDailyMissions().slice(0, 5);
+  container.innerHTML = missions.map((mission) => `
+    <article class="stack-item">
+      <div class="stack-icon">${icon(mission.icon)}</div>
+      <div class="stack-body">
+        <div class="stack-title">${escapeHtml(mission.title)}</div>
+        <div class="stack-sub">${mission.done ? 'Concluída' : 'Pendente'} · ${mission.xp} XP</div>
+      </div>
+      <div class="stack-right">${mission.done ? '✓' : '•'}</div>
     </article>
-  `).join('') : '<div class="item-card">Nenhuma refeição registrada para essa data.</div>';
+  `).join('');
+}
+
+function renderDashboardTimeline() {
+  const container = $('dashTimeline');
+  if (!container) return;
+  const items = getRecentActivity().slice(0, 6);
+  container.innerHTML = items.length ? items.map(renderStackActivity).join('') : emptyStack('Nenhuma atividade registrada ainda.');
+}
+
+function renderTreinos() {
+  const container = $('treinosGrid');
+  if (!container) return;
+
+  const typeFilter = $('treinoFiltroTipo')?.value || '';
+  const monthFilter = $('treinoFiltroPeriodo')?.value || '';
+  hydrateWorkoutTypeFilter();
+
+  const entries = state.treinos.filter((entry) => {
+    const matchesType = !typeFilter || entry.type === typeFilter;
+    const matchesMonth = !monthFilter || entry.date.slice(0, 7) === monthFilter;
+    return matchesType && matchesMonth;
+  });
+
+  container.innerHTML = entries.length ? entries.map((entry) => `
+    <article class="entry-card">
+      <div class="entry-top">
+        <span class="entry-cat">${escapeHtml(entry.type)}</span>
+        <span class="entry-date">${formatDatePt(entry.date)}</span>
+      </div>
+      <h3>${formatDuration(entry.durationMinutes)}</h3>
+      <div class="entry-meta">
+        <span>${entry.exercises.length} exercício(s)</span>
+        <span>${escapeHtml(entry.status)}</span>
+      </div>
+      ${entry.exercises.length ? `<div class="exercise-list">${entry.exercises.map(formatExercise).join('')}</div>` : ''}
+      ${entry.notes ? `<p class="entry-notes">${escapeHtml(entry.notes)}</p>` : ''}
+      <button class="button button-ghost entry-delete" data-delete-category="treinos" data-delete-id="${escapeHtml(entry.id)}" type="button">Excluir</button>
+    </article>
+  `).join('') : emptyGrid('Nenhum treino encontrado.');
+}
+
+function hydrateWorkoutTypeFilter() {
+  const select = $('treinoFiltroTipo');
+  if (!select) return;
+
+  const selected = select.value;
+  const types = [...new Set(state.treinos.map((entry) => entry.type).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  select.innerHTML = '<option value="">Todos os tipos</option>' + types.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('');
+  select.value = selected;
+}
+
+function renderCorridas() {
+  const container = $('corridasGrid');
+  if (!container) return;
+  const monthFilter = $('corridaFiltroPeriodo')?.value || '';
+  const entries = state.corridas.filter((entry) => !monthFilter || entry.date.slice(0, 7) === monthFilter);
+
+  container.innerHTML = entries.length ? entries.map((entry) => `
+    <article class="entry-card">
+      <div class="entry-top">
+        <span class="entry-cat">Corrida</span>
+        <span class="entry-date">${formatDatePt(entry.date)}</span>
+      </div>
+      <h3>${entry.distanceKm} km · ${escapeHtml(entry.pace || '-')}</h3>
+      <div class="entry-meta">
+        <span>${formatDuration(entry.durationMinutes)}</span>
+        <span>${entry.elevationM || 0} m elevação</span>
+        ${entry.temperatureC ? `<span>${entry.temperatureC} °C</span>` : ''}
+      </div>
+      ${entry.location ? `<p class="entry-notes">${escapeHtml(entry.location)}</p>` : ''}
+      ${entry.notes ? `<p class="entry-notes">${escapeHtml(entry.notes)}</p>` : ''}
+      ${entry.stravaUrl ? `<div class="entry-link"><a href="${escapeHtml(entry.stravaUrl)}" target="_blank" rel="noreferrer">Abrir Strava</a></div>` : ''}
+      <button class="button button-ghost entry-delete" data-delete-category="corridas" data-delete-id="${escapeHtml(entry.id)}" type="button">Excluir</button>
+    </article>
+  `).join('') : emptyGrid('Nenhuma corrida encontrada.');
+}
+
+function renderPeso() {
+  const list = $('pesoList');
+  if (list) {
+    list.innerHTML = state.peso.length ? state.peso.map((entry) => `
+      <article class="stack-item">
+        <div class="stack-icon">${icon('icon-peso')}</div>
+        <div class="stack-body">
+          <div class="stack-title">${entry.weightKg} kg</div>
+          <div class="stack-sub">${formatDatePt(entry.date)}${entry.notes ? ` · ${escapeHtml(entry.notes)}` : ''}</div>
+        </div>
+        <button class="button button-ghost entry-delete" data-delete-category="peso" data-delete-id="${escapeHtml(entry.id)}" type="button">Excluir</button>
+      </article>
+    `).join('') : emptyStack('Nenhum peso registrado.');
+  }
+
+  renderPesoChart();
+}
+
+function renderMedidas() {
+  const container = $('medidasGrid');
+  if (!container) return;
+
+  const latest = state.medidas[0];
+  const previous = state.medidas[1];
+  if (!latest) {
+    container.innerHTML = emptyGrid('Nenhuma medida registrada.');
+    return;
+  }
+
+  container.innerHTML = MEASURE_FIELDS.map(([key, label]) => {
+    const current = toNumber(latest[key], 0);
+    const last = previous ? toNumber(previous[key], 0) : 0;
+    const delta = previous ? Math.round((current - last) * 10) / 10 : 0;
+    const deltaClass = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+    const deltaText = previous ? `${delta > 0 ? '+' : ''}${delta} cm` : 'Primeiro registro';
+
+    return `
+      <article class="medida-card">
+        <div class="medida-label">${escapeHtml(label)}</div>
+        <div class="medida-value">${current || '--'} cm</div>
+        <div class="medida-delta ${deltaClass}">${escapeHtml(deltaText)}</div>
+      </article>
+    `;
+  }).join('') + `
+    <article class="medida-card medida-summary">
+      <div class="medida-label">Última atualização</div>
+      <div class="medida-value">${formatDatePt(latest.date)}</div>
+      <button class="button button-ghost entry-delete" data-delete-category="medidas" data-delete-id="${escapeHtml(latest.id)}" type="button">Excluir</button>
+    </article>
+  `;
+}
+
+function renderNutricao() {
+  const container = $('nutricaoList');
+  if (!container) return;
+
+  const filterDate = $('nutricaoFiltroData')?.value || todayStr();
+  if ($('nutricaoFiltroData') && !$('nutricaoFiltroData').value) $('nutricaoFiltroData').value = filterDate;
+  const entries = state.nutricao.filter((entry) => entry.date === filterDate).sort((a, b) => String(a.time).localeCompare(String(b.time)));
+
+  container.innerHTML = entries.length ? entries.map((entry) => `
+    <article class="stack-item stack-item-tall">
+      <div class="stack-icon">${icon('icon-nutricao')}</div>
+      <div class="stack-body">
+        <div class="stack-title">${escapeHtml(entry.type)}${entry.time ? ` · ${escapeHtml(entry.time)}` : ''}</div>
+        <div class="stack-sub">${entry.foods.length ? entry.foods.map(formatFood).join(' · ') : 'Sem alimentos detalhados'}</div>
+        ${entry.notes ? `<div class="stack-sub">${escapeHtml(entry.notes)}</div>` : ''}
+      </div>
+      <button class="button button-ghost entry-delete" data-delete-category="nutricao" data-delete-id="${escapeHtml(entry.id)}" type="button">Excluir</button>
+    </article>
+  `).join('') : emptyStack('Nenhuma refeição registrada para essa data.');
 }
 
 function renderAgua() {
-  const totalEl = document.getElementById('aguaTotal');
-  const fillEl = document.getElementById('aguaBarFill');
-  const pctEl = document.getElementById('aguaBarPct');
-  const listEl = document.getElementById('aguaHistorico');
-  const today = buildTodayKey();
-  const total = state.data.agua.filter(item => (item.data || '').slice(0, 10) === today).reduce((sum, item) => sum + Number(item.quantidade || item.ml || 0), 0);
-  if (totalEl) totalEl.textContent = `${total} ml`;
+  const today = todayStr();
+  const entries = state.agua.filter((entry) => entry.date === today).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const total = entries.reduce((sum, entry) => sum + toNumber(entry.amountMl, 0), 0);
   const pct = Math.min(100, Math.round((total / Math.max(CONFIG.aguaMeta, 1)) * 100));
-  if (fillEl) fillEl.style.width = `${pct}%`;
-  if (pctEl) pctEl.textContent = `${pct}%`;
-  if (listEl) {
-    const entries = [...state.data.agua].filter(item => (item.data || '').slice(0, 10) === today).sort((a, b) => new Date(b.data) - new Date(a.data));
-    listEl.innerHTML = entries.length ? entries.map(item => `<div class="item-card"><div class="surface-header"><div><strong>${formatDateTime(item.data)}</strong><div class="meta">Registro de hidratação</div></div><span class="badge">${item.quantidade || item.ml || 0} ml</span></div></div>`).join('') : '<div class="item-card">Nenhum registro de água hoje.</div>';
-  }
+
+  setText('aguaTotal', `${total} ml`);
+  setText('aguaBarPct', `${pct}%`);
+
+  const fill = $('aguaBarFill');
+  if (fill) fill.style.width = `${pct}%`;
+
+  const list = $('aguaHistorico');
+  if (!list) return;
+
+  list.innerHTML = entries.length ? entries.map((entry) => `
+    <article class="stack-item">
+      <div class="stack-icon">${icon('icon-agua')}</div>
+      <div class="stack-body">
+        <div class="stack-title">${entry.amountMl} ml</div>
+        <div class="stack-sub">${formatDateTime(entry.createdAt)}</div>
+      </div>
+      <button class="button button-ghost entry-delete" data-delete-category="agua" data-delete-id="${escapeHtml(entry.id)}" type="button">Excluir</button>
+    </article>
+  `).join('') : emptyStack('Nenhum registro de água hoje.');
 }
 
 function renderMissoes() {
-  const container = document.getElementById('missoesGrid');
+  const container = $('missoesGrid');
   if (!container) return;
-  const missions = getDailyMissions();
-  container.innerHTML = missions.map(m => `
-    <article class="item-card ${m.done ? 'mission-done' : ''}">
-      <div class="surface-header">
-        <div><strong>${m.name}</strong><div class="meta">${m.xp} XP</div></div>
-        ${m.done ? '<span class="badge success">✓ Concluída</span>' : '<span class="badge warn">Pendente</span>'}
+
+  container.innerHTML = getDailyMissions().map((mission) => `
+    <article class="missao-card ${mission.done ? 'done' : ''}">
+      <div class="missao-head">
+        <div class="missao-icon">${icon(mission.icon)}</div>
+        <span class="missao-status ${mission.done ? 'done' : 'pending'}">${mission.done ? 'Concluída' : 'Pendente'}</span>
       </div>
-      <p class="meta">${m.description}</p>
+      <h3>${escapeHtml(mission.title)}</h3>
+      <p class="muted">${escapeHtml(mission.description)}</p>
+      <span class="missao-xp">${mission.xp} XP</span>
     </article>
   `).join('');
 }
 
 function renderTimeline() {
-  const container = document.getElementById('timelineFeed');
+  const container = $('timelineFeed');
   if (!container) return;
   const items = getRecentActivity();
-  container.innerHTML = items.length ? items.map(item => `
-    <article class="item-card">
-      <div class="surface-header"><div><strong>${item.title}</strong><div class="meta">${formatDate(item.date)}</div></div><span class="badge">+${item.xp} XP</span></div>
-      <p class="meta">${item.summary}</p>
+
+  container.innerHTML = items.length ? items.map((item) => `
+    <article class="timeline-item">
+      <div class="timeline-dot">${icon(item.icon)}</div>
+      <div class="timeline-body">
+        <span class="tl-date">${formatDatePt(item.date)}</span>
+        <h3>${escapeHtml(item.title)}</h3>
+        <p>${escapeHtml(item.summary)}</p>
+        <span class="tl-xp">+${item.xp} XP</span>
+      </div>
     </article>
-  `).join('') : '<div class="item-card">Nenhuma atividade registrada ainda.</div>';
+  `).join('') : emptyStack('Nenhuma atividade registrada ainda.');
 }
 
 function renderExportar() {
-  const preview = document.getElementById('exportPreview');
-  if (!preview) return;
-  const data = buildExportData();
-  preview.textContent = JSON.stringify(data, null, 2);
+  const preview = $('exportPreview');
+  if (preview) preview.textContent = JSON.stringify(buildExportData(), null, 2);
 }
 
 function renderConfiguracoes() {
-  const cfgApiUrl = document.getElementById('cfgApiUrl');
-  const cfgAguaMeta = document.getElementById('cfgAguaMeta');
-  const cfgPesoMeta = document.getElementById('cfgPesoMeta');
-  if (cfgApiUrl) cfgApiUrl.value = CONFIG.apiUrl;
-  if (cfgAguaMeta) cfgAguaMeta.value = CONFIG.aguaMeta;
-  if (cfgPesoMeta) cfgPesoMeta.value = CONFIG.pesoMeta;
+  setInputValue('cfgApiUrl', CONFIG.apiUrl);
+  setInputValue('cfgAguaMeta', CONFIG.aguaMeta);
+  setInputValue('cfgPesoMeta', CONFIG.pesoMeta || '');
+  setInputValue('cfgXpTreino', CONFIG.xp.treino);
+  setInputValue('cfgXpCorrida', CONFIG.xp.corrida);
+  setInputValue('cfgXpNutricao', CONFIG.xp.nutricao);
+  setInputValue('cfgXpAgua', CONFIG.xp.agua);
+  setInputValue('cfgXpPeso', CONFIG.xp.peso);
+  setInputValue('cfgXpStreak', CONFIG.xp.streak);
 }
 
 function renderScoreChart() {
-  const ctx = document.getElementById('canvasScore');
-  if (!ctx) return;
-  const labels = Array.from({ length: 30 }, (_, index) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (29 - index));
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-  });
-  const values = labels.map((_, idx) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (29 - idx));
-    const dayKey = d.toISOString().slice(0, 10);
-    const hasAny = [...state.data.treinos, ...state.data.corridas, ...state.data.peso, ...state.data.agua, ...state.data.refeicoes].some(item => (item.data || '').slice(0, 10) === dayKey);
-    return hasAny ? computeSpiderScore({ ...state.data, treinos: state.data.treinos.filter(item => (item.data || '').slice(0, 10) === dayKey), corridas: state.data.corridas.filter(item => (item.data || '').slice(0, 10) === dayKey), peso: state.data.peso.filter(item => (item.data || '').slice(0, 10) === dayKey), agua: state.data.agua.filter(item => (item.data || '').slice(0, 10) === dayKey), refeicoes: state.data.refeicoes.filter(item => (item.data || '').slice(0, 10) === dayKey) }, CONFIG).score : 0;
-  });
-  if (scoreChart) scoreChart.destroy();
-  scoreChart = new Chart(ctx, {
-    type: 'line', data: { labels, datasets: [{ label: 'Spider Score', data: values, borderColor: '#d42736', pointBackgroundColor: '#1b4f9c', tension: .35, fill: true, backgroundColor: 'rgba(212,39,54,0.15)' }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100 } } }
+  const canvas = $('canvasScore');
+  const ChartCtor = window.Chart;
+  if (!canvas || !ChartCtor) return;
+
+  const labels = [];
+  const values = [];
+  for (let index = 29; index >= 0; index -= 1) {
+    const date = new Date();
+    date.setDate(date.getDate() - index);
+    const key = date.toISOString().slice(0, 10);
+    labels.push(date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }));
+    values.push(state.scoreHistory.find((entry) => entry.date === key)?.score || 0);
+  }
+
+  state.charts.score?.destroy();
+  state.charts.score = new ChartCtor(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Spider Score',
+        data: values,
+        borderColor: '#d42736',
+        pointBackgroundColor: '#1b4f9c',
+        backgroundColor: 'rgba(212,39,54,0.15)',
+        tension: 0.35,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, max: 100 } },
+    },
   });
 }
 
-function renderPesoChart(list) {
-  const ctx = document.getElementById('canvasPeso');
-  if (!ctx) return;
-  const labels = list.map(item => formatDate(item.data));
-  const values = list.map(item => Number(item.peso));
-  const metaValues = list.map(() => CONFIG.pesoMeta || 0);
-  if (pesoChart) pesoChart.destroy();
-  pesoChart = new Chart(ctx, { type: 'line', data: { labels, datasets: [{ label: 'Peso', data: values, borderColor: '#d42736', tension: .35 }, { label: 'Meta', data: metaValues, borderColor: '#1b4f9c', borderDash: [6, 6] }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: false } } } });
-}
+function renderPesoChart() {
+  const canvas = $('canvasPeso');
+  const ChartCtor = window.Chart;
+  if (!canvas || !ChartCtor) return;
 
-function getDailyMissions() {
-  const today = buildTodayKey();
-  const hasTreino = state.data.treinos.some(item => (item.data || '').slice(0, 10) === today);
-  const hasCorrida = state.data.corridas.some(item => (item.data || '').slice(0, 10) === today);
-  const hasRefeicao = state.data.refeicoes.some(item => (item.data || '').slice(0, 10) === today);
-  const hasAgua = state.data.agua.filter(item => (item.data || '').slice(0, 10) === today).reduce((sum, item) => sum + Number(item.quantidade || item.ml || 0), 0) >= CONFIG.aguaMeta;
-  const hasPeso = state.data.peso.some(item => (item.data || '').slice(0, 10) === today);
-  const streak = computeSpiderScore(state.data, CONFIG).streak;
-  const hasMeasuresThisWeek = state.data.medidas.some(item => {
-    const d = new Date(item.data || new Date());
-    const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
-    return d >= weekAgo;
+  const list = [...state.peso].sort((a, b) => a.date.localeCompare(b.date)).slice(-20);
+  state.charts.peso?.destroy();
+  state.charts.peso = new ChartCtor(canvas, {
+    type: 'line',
+    data: {
+      labels: list.map((entry) => formatDatePt(entry.date)),
+      datasets: [
+        {
+          label: 'Peso',
+          data: list.map((entry) => entry.weightKg),
+          borderColor: '#d42736',
+          pointBackgroundColor: '#d42736',
+          tension: 0.35,
+        },
+        {
+          label: 'Meta',
+          data: list.map(() => CONFIG.pesoMeta || null),
+          borderColor: '#1b4f9c',
+          borderDash: [6, 6],
+          pointRadius: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true } },
+      scales: { y: { beginAtZero: false } },
+    },
   });
-  return [
-    { name: 'Registrar treino', xp: 100, description: 'Treino salvo hoje', done: hasTreino },
-    { name: 'Registrar corrida', xp: 120, description: 'Corrida salva hoje', done: hasCorrida },
-    { name: 'Registrar alimentação', xp: 20, description: 'Refeição salva hoje', done: hasRefeicao },
-    { name: 'Bater meta de água', xp: 10, description: 'Água >= meta do dia', done: hasAgua },
-    { name: 'Registrar peso', xp: 15, description: 'Peso salvo hoje', done: hasPeso },
-    { name: 'Sequência mantida', xp: 50, description: 'Registro em dias consecutivos', done: streak > 1 },
-    { name: 'Registrar medidas', xp: 30, description: 'Medida salva esta semana', done: hasMeasuresThisWeek }
-  ];
 }
 
 function getRecentActivity() {
-  const items = [];
-  state.data.treinos.forEach(item => items.push({ date: item.data, title: 'Treino', summary: `${item.tipo || 'Treino'} • ${item.duracao || '-'} min`, xp: item.xpGain || CONFIG.xp.treino }));
-  state.data.corridas.forEach(item => items.push({ date: item.data, title: 'Corrida', summary: `${item.distancia || 0} km • ${item.tempo || '--:--:--'}`, xp: item.xpGain || CONFIG.xp.corrida }));
-  state.data.peso.forEach(item => items.push({ date: item.data, title: 'Peso', summary: `${item.peso} kg`, xp: item.xpGain || CONFIG.xp.peso }));
-  state.data.refeicoes.forEach(item => items.push({ date: item.data, title: 'Refeição', summary: `${item.tipo || 'Refeição'} • ${item.alimentos || '-'}`, xp: item.xpGain || CONFIG.xp.nutricao }));
-  state.data.agua.forEach(item => items.push({ date: item.data, title: 'Água', summary: `${item.quantidade || item.ml || 0} ml`, xp: item.xpGain || CONFIG.xp.agua }));
-  state.data.medidas.forEach(item => items.push({ date: item.data, title: 'Medidas', summary: 'Registro de medidas corporais', xp: 30 }));
-  return items.sort((a, b) => new Date(b.date) - new Date(a.date));
+  const items = [
+    ...state.treinos.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-treino',
+      title: 'Treino',
+      summary: `${entry.type} · ${formatDuration(entry.durationMinutes)}`,
+      xp: CONFIG.xp.treino,
+    })),
+    ...state.corridas.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-corrida',
+      title: 'Corrida',
+      summary: `${entry.distanceKm} km · ${entry.pace || formatDuration(entry.durationMinutes)}`,
+      xp: CONFIG.xp.corrida,
+    })),
+    ...state.peso.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-peso',
+      title: 'Peso',
+      summary: `${entry.weightKg} kg`,
+      xp: CONFIG.xp.peso,
+    })),
+    ...state.medidas.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-medidas',
+      title: 'Medidas',
+      summary: 'Registro de medidas corporais',
+      xp: 30,
+    })),
+    ...state.nutricao.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-nutricao',
+      title: 'Refeição',
+      summary: `${entry.type} · ${entry.foods.length} alimento(s)`,
+      xp: CONFIG.xp.nutricao,
+    })),
+    ...state.agua.map((entry) => ({
+      date: entry.date,
+      icon: 'icon-agua',
+      title: 'Água',
+      summary: `${entry.amountMl} ml`,
+      xp: CONFIG.xp.agua,
+    })),
+  ];
+
+  return items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
 function buildExportData() {
-  const now = new Date();
-  const start = new Date(now); start.setDate(now.getDate() - 6);
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const startISO = start.toISOString().slice(0, 10);
+
   return {
-    exportedAt: now.toISOString(),
+    exportedAt: nowIso(),
     user: state.user?.username || 'admin',
-    summary: computeSpiderScore(state.data, CONFIG),
-    week: {
-      treinos: state.data.treinos.filter(item => new Date(item.data) >= start),
-      corridas: state.data.corridas.filter(item => new Date(item.data) >= start),
-      peso: state.data.peso.filter(item => new Date(item.data) >= start),
-      medidas: state.data.medidas.filter(item => new Date(item.data) >= start),
-      refeicoes: state.data.refeicoes.filter(item => new Date(item.data) >= start),
-      agua: state.data.agua.filter(item => new Date(item.data) >= start)
-    }
+    summary: {
+      spiderScore: computeSpiderScore(),
+      xpTotal: state.xpTotal,
+      level: getLevel(),
+      streakDays: calcStreak(),
+      waterTodayMl: waterToday(),
+      pendingSync: state.pendingSync.length,
+    },
+    week: Object.fromEntries(CATEGORIES.map((category) => [category, state[category].filter((entry) => entry.date >= startISO)])),
+    all: Object.fromEntries(CATEGORIES.map((category) => [category, state[category]])),
   };
+}
+
+function exportJSON() {
+  downloadFile('spider-semana.json', JSON.stringify(buildExportData(), null, 2), 'application/json;charset=utf-8');
+  showToast('Exportação JSON criada.', 'success');
+}
+
+function exportCSV() {
+  const rows = getRecentActivity().map((item) => [item.date, item.title, item.summary, item.xp]);
+  const content = [['data', 'tipo', 'resumo', 'xp'], ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
+  downloadFile('spider-dados.csv', content, 'text/csv;charset=utf-8');
+  showToast('Exportação CSV criada.', 'success');
+}
+
+function csvCell(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
 
 function downloadFile(filename, content, type) {
@@ -661,382 +1477,342 @@ function downloadFile(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
-function exportJSON() {
-  const payload = buildExportData();
-  downloadFile('spider-semana.json', JSON.stringify(payload, null, 2), 'application/json');
-  showToast('Exportação JSON criada', 'success');
+function icon(id) {
+  return `<svg aria-hidden="true"><use href="#${id}"></use></svg>`;
 }
 
-function exportCSV() {
-  const rows = [];
-  const allEntries = [
-    ...state.data.treinos.map(item => ({ type: 'treino', date: item.data, value: item.tipo || '-', note: item.duracao || '-' })),
-    ...state.data.corridas.map(item => ({ type: 'corrida', date: item.data, value: item.distancia || '-', note: item.tempo || '-' })),
-    ...state.data.peso.map(item => ({ type: 'peso', date: item.data, value: item.peso || '-', note: item.observacoes || '-' })),
-    ...state.data.refeicoes.map(item => ({ type: 'refeicao', date: item.data, value: item.tipo || '-', note: item.alimentos || '-' })),
-    ...state.data.agua.map(item => ({ type: 'agua', date: item.data, value: item.quantidade || item.ml || '-', note: '-' }))
-  ];
-  const header = 'type,date,value,note';
-  const body = allEntries.map(row => `${row.type},${row.date},${row.value},${row.note}`).join('\n');
-  downloadFile('spider-dados.csv', `${header}\n${body}`, 'text/csv');
-  showToast('Exportação CSV criada', 'success');
+function emptyGrid(message) {
+  return `<article class="entry-card empty-state">${escapeHtml(message)}</article>`;
 }
 
-function getSensacaoEmoji(value) {
-  if (value >= 4) return '😄';
-  if (value === 3) return '🙂';
-  if (value === 2) return '😐';
-  return '😣';
+function emptyStack(message) {
+  return `<article class="stack-item empty-state"><div class="stack-body"><div class="stack-title">${escapeHtml(message)}</div></div></article>`;
 }
 
-function persistData() {
-  localStorage.setItem('spider_data', JSON.stringify(state.data));
+function renderStackActivity(item) {
+  return `
+    <article class="stack-item">
+      <div class="stack-icon">${icon(item.icon)}</div>
+      <div class="stack-body">
+        <div class="stack-title">${escapeHtml(item.title)}</div>
+        <div class="stack-sub">${formatDatePt(item.date)} · ${escapeHtml(item.summary)}</div>
+      </div>
+      <div class="stack-right"><span class="stack-xp">+${item.xp}</span></div>
+    </article>
+  `;
 }
 
-function loadData() {
-  const stored = safeParseJSON(localStorage.getItem('spider_data'), null);
-  if (stored) state.data = { ...state.data, ...stored };
+function formatExercise(exercise) {
+  const pieces = [
+    exercise.sets && exercise.reps ? `${exercise.sets} x ${exercise.reps}` : '',
+    exercise.loadKg ? `${exercise.loadKg} kg` : '',
+    exercise.durationSeconds ? `${exercise.durationSeconds}s` : '',
+  ].filter(Boolean);
+
+  return `<div>${escapeHtml(exercise.name || 'Exercício')}${pieces.length ? ` · ${escapeHtml(pieces.join(' · '))}` : ''}</div>`;
 }
 
-async function apiGet(action) {
-  const res = await fetch(`${CONFIG.apiUrl}?action=${action}`, { method: 'GET', redirect: 'follow' });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Falha na requisição (${res.status})`);
+function formatFood(food) {
+  return `${food.quantity} ${food.unit} ${food.name}`.trim();
+}
+
+function updateUserChip() {
+  if (!state.user) return;
+  setText('userInitials', state.user.initials || getInitials(state.user.name || state.user.username));
+  setText('userName', state.user.name || state.user.username || 'Usuário');
+}
+
+function persistSettingsLocal() {
+  localStorage.setItem(STORAGE_KEYS.apiUrl, CONFIG.apiUrl);
+  localStorage.setItem(STORAGE_KEYS.aguaMeta, String(CONFIG.aguaMeta));
+  localStorage.setItem(STORAGE_KEYS.pesoMeta, String(CONFIG.pesoMeta));
+  localStorage.setItem(STORAGE_KEYS.xpTreino, String(CONFIG.xp.treino));
+  localStorage.setItem(STORAGE_KEYS.xpCorrida, String(CONFIG.xp.corrida));
+  localStorage.setItem(STORAGE_KEYS.xpNutricao, String(CONFIG.xp.nutricao));
+  localStorage.setItem(STORAGE_KEYS.xpAgua, String(CONFIG.xp.agua));
+  localStorage.setItem(STORAGE_KEYS.xpPeso, String(CONFIG.xp.peso));
+  localStorage.setItem(STORAGE_KEYS.xpStreak, String(CONFIG.xp.streak));
+}
+
+async function saveSettings() {
+  CONFIG.apiUrl = String($('cfgApiUrl')?.value || '').trim();
+  CONFIG.aguaMeta = toNumber($('cfgAguaMeta')?.value, 2500);
+  CONFIG.pesoMeta = toNumber($('cfgPesoMeta')?.value, 0);
+  CONFIG.xp.treino = toNumber($('cfgXpTreino')?.value, 100);
+  CONFIG.xp.corrida = toNumber($('cfgXpCorrida')?.value, 120);
+  CONFIG.xp.nutricao = toNumber($('cfgXpNutricao')?.value, 20);
+  CONFIG.xp.agua = toNumber($('cfgXpAgua')?.value, 10);
+  CONFIG.xp.peso = toNumber($('cfgXpPeso')?.value, 15);
+  CONFIG.xp.streak = toNumber($('cfgXpStreak')?.value, 50);
+  persistSettingsLocal();
+  renderAll();
+
+  if (hasApi()) {
+    try {
+      await apiPost('settings', {
+        settings: {
+          userName: state.user?.name || 'Spider',
+          targetWeightKg: CONFIG.pesoMeta,
+          dailyWaterGoalMl: CONFIG.aguaMeta,
+          weeklyWorkoutGoal: 4,
+          weeklyRunGoal: 2,
+          xpWorkout: CONFIG.xp.treino,
+          xpRun: CONFIG.xp.corrida,
+          xpNutrition: CONFIG.xp.nutricao,
+          xpWater: CONFIG.xp.agua,
+          xpWeight: CONFIG.xp.peso,
+          xpStreak: CONFIG.xp.streak,
+          xpMission: 30,
+        },
+      });
+    } catch (error) {
+      console.warn('Falha ao salvar configurações na API:', error);
+      showToast('Configurações salvas localmente. A planilha não respondeu.', 'warning');
+      return;
+    }
   }
-  return parseJsonResponse(res);
+
+  showToast('Configurações salvas.', 'success');
 }
 
-async function apiPost(payload) {
-  const res = await fetch(CONFIG.apiUrl, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Falha na requisição (${res.status})`);
-  }
-  return parseJsonResponse(res);
+function getFormPayload(form) {
+  return Object.fromEntries(new FormData(form).entries());
 }
 
-async function parseJsonResponse(res) {
-  const raw = await res.text();
-  if (!raw) return {};
+async function submitRecordForm(event, category, buildRecord, modalId, successMessage) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('[type="submit"]');
+  submit?.setAttribute('disabled', 'true');
 
   try {
-    return JSON.parse(raw);
+    await saveRecord(category, buildRecord(getFormPayload(form)));
+    form.reset();
+    closeModal(modalId);
+    setDefaultDates();
+    showToast(successMessage, 'success');
   } catch (error) {
-    throw new Error(raw || 'Resposta inválida do Apps Script.');
+    console.error(error);
+    showToast('Não consegui salvar esse registro.', 'error');
+  } finally {
+    submit?.removeAttribute('disabled');
   }
+}
+
+function setDefaultDates() {
+  ['treinoData', 'corridaData', 'pesoData', 'medidasData', 'refeicaoData', 'aguaData'].forEach((id) => {
+    const input = $(id);
+    if (input && !input.value) input.value = todayStr();
+  });
+
+  const nutritionFilter = $('nutricaoFiltroData');
+  if (nutritionFilter && !nutritionFilter.value) nutritionFilter.value = todayStr();
+}
+
+function openModal(id) {
+  setDefaultDates();
+  const modal = $(id);
+  if (modal?.showModal && !modal.open) modal.showModal();
+}
+
+function closeModal(id) {
+  const modal = $(id);
+  if (modal?.close && modal.open) modal.close();
 }
 
 function wireEvents() {
-  document.querySelectorAll('.nav-item').forEach((btn) => {
-    btn.removeEventListener('click', handleNavClick);
-    btn.addEventListener('click', handleNavClick);
-  });
-
-  document.querySelectorAll('[data-page]').forEach((btn) => {
-    btn.removeEventListener('click', handleNavClick);
-    btn.addEventListener('click', handleNavClick);
-  });
-
-  document.getElementById('themeToggle')?.addEventListener('click', () => {
-    const isLight = document.documentElement.classList.toggle('light');
-    localStorage.setItem('spider_theme', isLight ? 'light' : 'dark');
-    document.getElementById('themeToggle').textContent = isLight ? 'Modo escuro' : 'Modo claro';
-  });
-
-  document.getElementById('mobileMenuButton')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('is-open');
-    document.getElementById('sidebarScrim')?.classList.toggle('is-visible');
-  });
-  document.getElementById('sidebarScrim')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.remove('is-open');
-    document.getElementById('sidebarScrim')?.classList.remove('is-visible');
-  });
-
-  document.getElementById('logoutButton')?.addEventListener('click', () => {
-    clearStoredSession();
-    state.user = null;
-    document.getElementById('loginView')?.classList.remove('is-hidden');
-    document.getElementById('appView')?.classList.add('is-hidden');
-    showToast('Sessão encerrada', 'success');
-  });
-
-  document.getElementById('refreshButton')?.addEventListener('click', () => {
-    loadData();
-    updateXpUI();
-    renderPage(state.currentPage);
-    showToast('Dados atualizados', 'success');
-  });
-
-  document.getElementById('loginForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const button = document.getElementById('loginButton');
-    const loader = button?.querySelector('.button-loader');
-    const username = document.getElementById('loginUsername').value.trim();
-    const password = document.getElementById('loginPassword').value;
-    const error = document.getElementById('loginError');
-
-    if (button) button.disabled = true;
-    if (loader) loader.style.display = 'inline-block';
-    await new Promise(resolve => setTimeout(resolve, 600));
-
-    const authenticatedUser = await authenticateUser(username, password);
-    if (!authenticatedUser) {
-      if (error) error.textContent = 'Usuário ou senha inválidos.';
-      if (button) button.disabled = false;
-      if (loader) loader.style.display = 'none';
+  document.addEventListener('click', async (event) => {
+    const pageButton = event.target.closest('[data-page]');
+    if (pageButton) {
+      navigateTo(pageButton.dataset.page);
       return;
     }
 
-    state.user = authenticatedUser;
-    setStoredSession(state.user);
-    document.getElementById('loginView')?.classList.add('is-hidden');
-    document.getElementById('appView')?.classList.remove('is-hidden');
-    document.getElementById('userInitials').textContent = state.user.initials;
-    document.getElementById('userName').textContent = state.user.name;
-    updateXpUI();
-    navigateTo('dashboard');
-    if (button) button.disabled = false;
-    if (loader) loader.style.display = 'none';
+    const deleteButton = event.target.closest('[data-delete-category][data-delete-id]');
+    if (deleteButton) {
+      const confirmed = window.confirm('Excluir este registro?');
+      if (confirmed) await deleteRecord(deleteButton.dataset.deleteCategory, deleteButton.dataset.deleteId);
+    }
   });
 
-  document.getElementById('btnSalvarConfig')?.addEventListener('click', () => {
-    CONFIG.apiUrl = document.getElementById('cfgApiUrl').value;
-    CONFIG.aguaMeta = Number(document.getElementById('cfgAguaMeta').value) || 2500;
-    CONFIG.pesoMeta = Number(document.getElementById('cfgPesoMeta').value) || 0;
-    localStorage.setItem('spider_api_url', CONFIG.apiUrl);
-    localStorage.setItem('spider_agua_meta', String(CONFIG.aguaMeta));
-    localStorage.setItem('spider_peso_meta', String(CONFIG.pesoMeta));
-    showToast('Configurações salvas', 'success');
+  $('themeToggle')?.addEventListener('click', () => {
+    const isLight = document.documentElement.classList.toggle('light');
+    localStorage.setItem(STORAGE_KEYS.theme, isLight ? 'light' : 'dark');
+    setText('themeToggle', isLight ? 'Modo escuro' : 'Modo claro');
   });
 
-  document.getElementById('btnExportJSON')?.addEventListener('click', exportJSON);
-  document.getElementById('btnExportCSV')?.addEventListener('click', exportCSV);
-
-  document.querySelectorAll('.modal').forEach(modal => {
-    modal.addEventListener('click', e => { if (e.target === modal) modal.close(); });
+  $('mobileMenuButton')?.addEventListener('click', () => {
+    $('sidebar')?.classList.toggle('is-open');
+    $('sidebarScrim')?.classList.toggle('is-visible');
   });
-  document.querySelectorAll('.modal-close').forEach(btn => btn.addEventListener('click', () => btn.closest('dialog')?.close()));
 
-  document.querySelectorAll('.button-subtle[data-ml]').forEach(btn => btn.addEventListener('click', async () => {
-    const qty = Number(btn.dataset.ml);
-    const record = {
-      id: uid('agua'),
-      date: todayStr(),
-      amountMl: qty,
-      notes: '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+  $('sidebarScrim')?.addEventListener('click', () => {
+    $('sidebar')?.classList.remove('is-open');
+    $('sidebarScrim')?.classList.remove('is-visible');
+  });
+
+  $('logoutButton')?.addEventListener('click', () => {
+    clearStoredSession();
+    state.user = null;
+    $('loginView')?.classList.remove('is-hidden');
+    $('appView')?.classList.add('is-hidden');
+    showToast('Sessão encerrada.', 'success');
+  });
+
+  $('refreshButton')?.addEventListener('click', () => loadAll());
+  $('btnSalvarConfig')?.addEventListener('click', saveSettings);
+  $('btnExportJSON')?.addEventListener('click', exportJSON);
+  $('btnExportCSV')?.addEventListener('click', exportCSV);
+
+  ['treinoFiltroTipo', 'treinoFiltroPeriodo'].forEach((id) => $(id)?.addEventListener('change', renderTreinos));
+  $('corridaFiltroPeriodo')?.addEventListener('change', renderCorridas);
+  $('nutricaoFiltroData')?.addEventListener('change', renderNutricao);
+  $('corridaDistancia')?.addEventListener('input', updatePacePreview);
+  $('corridaTempo')?.addEventListener('input', updatePacePreview);
+
+  $$('.modal').forEach((modal) => {
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) modal.close();
+    });
+  });
+
+  $$('.modal-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
+
+  $('btnNovoTreino')?.addEventListener('click', () => openModal('treinoModal'));
+  $('btnNovaCorrida')?.addEventListener('click', () => openModal('corridaModal'));
+  $('btnNovoPeso')?.addEventListener('click', () => openModal('pesoModal'));
+  $('btnNovasMedidas')?.addEventListener('click', () => openModal('medidasModal'));
+  $('btnNovaRefeicao')?.addEventListener('click', () => openModal('refeicaoModal'));
+  $('btnRegistrarAgua')?.addEventListener('click', () => openModal('aguaModal'));
+
+  $$('.button-subtle[data-ml]').forEach((button) => {
+    button.addEventListener('click', () => saveRecord('agua', { amountMl: button.dataset.ml, date: todayStr() }));
+  });
+
+  $('treinoForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'treinos', (payload) => ({
+    date: payload.data,
+    type: payload.tipo,
+    durationMinutes: payload.duracao,
+    exercises: parseExerciseText(payload.exercicios),
+    notes: payload.observacoes,
+  }), 'treinoModal', 'Treino registrado.'));
+
+  $('corridaForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'corridas', (payload) => {
+    const durationMinutes = parseDurationToMinutes(payload.tempo);
+    const distanceKm = toNumber(payload.distancia, 0);
+    return {
+      date: payload.data,
+      distanceKm,
+      durationMinutes,
+      pace: payload.pace || calculatePace(distanceKm, durationMinutes),
+      elevationM: payload.elevacao,
+      location: payload.local,
+      temperatureC: payload.temperatura,
+      feeling: payload.sensacao,
+      notes: payload.observacoes,
+      stravaUrl: payload.linkStrava,
     };
-    await saveRecord('agua', record);
-    updateXpUI();
-    renderAgua();
-    showToast(`+${qty} ml registrados`, 'success');
-  }));
+  }, 'corridaModal', 'Corrida registrada.'));
 
-  document.getElementById('btnRegistrarAgua')?.addEventListener('click', () => openModal('aguaModal'));
-  document.getElementById('btnNovoTreino')?.addEventListener('click', () => openModal('treinoModal'));
-  document.getElementById('btnNovaCorrida')?.addEventListener('click', () => openModal('corridaModal'));
-  document.getElementById('btnNovoPeso')?.addEventListener('click', () => openModal('pesoModal'));
-  document.getElementById('btnNovasMedidas')?.addEventListener('click', () => openModal('medidasModal'));
-  document.getElementById('btnNovaRefeicao')?.addEventListener('click', () => openModal('refeicaoModal'));
+  $('pesoForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'peso', (payload) => ({
+    date: payload.data,
+    weightKg: payload.peso,
+    notes: payload.observacoes,
+  }), 'pesoModal', 'Peso registrado.'));
 
-  document.getElementById('treinoForm')?.addEventListener('submit', async (event) => {
+  $('medidasForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'medidas', (payload) => ({
+    date: payload.data,
+    leftArmCm: payload.bracoEsq,
+    rightArmCm: payload.bracoDir,
+    chestCm: payload.peitoral,
+    waistCm: payload.cintura,
+    hipCm: payload.quadril,
+    thighCm: payload.coxa,
+    calfCm: payload.panturrilha,
+    neckCm: payload.pescoco,
+    forearmCm: payload.antebraco,
+  }), 'medidasModal', 'Medidas registradas.'));
+
+  $('refeicaoForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'nutricao', (payload) => ({
+    date: payload.data,
+    time: payload.horario,
+    type: payload.tipo,
+    foods: parseFoodText(payload.alimentos),
+    notes: payload.observacoes,
+  }), 'refeicaoModal', 'Refeição registrada.'));
+
+  $('aguaForm')?.addEventListener('submit', (event) => submitRecordForm(event, 'agua', (payload) => ({
+    date: payload.data,
+    amountMl: payload.quantidade,
+  }), 'aguaModal', 'Água registrada.'));
+
+  $('loginForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = {
-      id: uid('treino'),
-      date: payload.data || todayStr(),
-      type: payload.tipo || 'Outro',
-      durationMinutes: Number(payload.duracao || 0),
-      exercises: payload.exercicios || '',
-      notes: payload.observacoes || '',
-      status: 'done',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('treinos', record);
-    updateXpUI();
-    renderTreinos();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('treinoModal');
-    showToast('Treino registrado', 'success');
-  });
+    const button = $('loginButton');
+    const username = $('loginUsername')?.value.trim();
+    const password = $('loginPassword')?.value;
+    const error = $('loginError');
 
-  document.getElementById('corridaForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const pace = payload.tempo && payload.distancia ? (payload.tempo.split(':').reduce((acc, part, idx) => acc + Number(part) * [3600, 60, 1][idx], 0) / Number(payload.distancia)).toFixed(2) : '—';
-    const record = {
-      id: uid('corrida'),
-      date: payload.data || todayStr(),
-      distanceKm: Number(payload.distancia || 0),
-      durationMinutes: Number(payload.duracao || 0),
-      pace,
-      elevationM: Number(payload.elevacao || 0),
-      location: payload.local || '',
-      temperatureC: Number(payload.temperatura || 0),
-      feeling: payload.sensacao || '',
-      notes: payload.observacoes || '',
-      stravaUrl: payload.stravaUrl || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('corridas', record);
-    updateXpUI();
-    renderCorridas();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('corridaModal');
-    showToast('Corrida registrada', 'success');
-  });
+    if (error) error.textContent = '';
+    button?.setAttribute('disabled', 'true');
 
-  document.getElementById('pesoForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = {
-      id: uid('peso'),
-      date: payload.data || todayStr(),
-      weightKg: Number(payload.peso || 0),
-      notes: payload.observacoes || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('peso', record);
-    updateXpUI();
-    renderPeso();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('pesoModal');
-    showToast('Peso registrado', 'success');
-  });
+    const user = await authenticateUser(username, password);
+    if (!user) {
+      if (error) error.textContent = 'Usuário ou senha inválidos.';
+      button?.removeAttribute('disabled');
+      return;
+    }
 
-  document.getElementById('medidasForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = {
-      id: uid('medida'),
-      date: payload.data || todayStr(),
-      leftArmCm: Number(payload.braçoEsq || 0),
-      rightArmCm: Number(payload.braçoDir || 0),
-      chestCm: Number(payload.peito || 0),
-      waistCm: Number(payload.cintura || 0),
-      hipCm: Number(payload.quadril || 0),
-      thighCm: Number(payload.coxa || 0),
-      calfCm: Number(payload.panturrilha || 0),
-      neckCm: Number(payload.pescoço || 0),
-      forearmCm: Number(payload.antebraço || 0),
-      notes: payload.observacoes || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('medidas', record);
-    updateXpUI();
-    renderMedidas();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('medidasModal');
-    showToast('Medidas registradas', 'success');
-  });
-
-  document.getElementById('refeicaoForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = {
-      id: uid('refeicao'),
-      date: payload.data || todayStr(),
-      time: payload.hora || '',
-      type: payload.tipo || 'Outro',
-      foods: payload.alimentos || '',
-      notes: payload.observacoes || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('nutricao', record);
-    updateXpUI();
-    renderNutricao();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('refeicaoModal');
-    showToast('Refeição registrada', 'success');
-  });
-
-  document.getElementById('aguaForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = {
-      id: uid('agua'),
-      date: payload.data || todayStr(),
-      amountMl: Number(payload.quantidade || 0),
-      notes: payload.observacoes || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecord('agua', record);
-    updateXpUI();
-    renderAgua();
-    renderDashboard();
-    event.currentTarget.reset();
-    closeModal('aguaModal');
-    showToast('Água registrada', 'success');
+    await enterApp(user, true);
+    button?.removeAttribute('disabled');
   });
 }
 
-function handleNavClick(event) {
-  const page = event.currentTarget?.dataset?.page;
-  if (!page) return;
-  navigateTo(page);
+async function enterApp(user, persistSession = false) {
+  state.user = user;
+  if (persistSession) setStoredSession(user);
+  $('loginView')?.classList.add('is-hidden');
+  $('appView')?.classList.remove('is-hidden');
+  updateUserChip();
+  navigateTo('dashboard');
+  await loadAll({ silent: true });
 }
-
-function openModal(id) { document.getElementById(id)?.showModal(); }
-function closeModal(id) { document.getElementById(id)?.close(); }
 
 async function bootstrap() {
   ensureDefaultUsers();
-  loadData();
-  const savedTheme = localStorage.getItem('spider_theme');
-  if (savedTheme === 'light') document.documentElement.classList.add('light');
+  setDefaultDates();
+
+  const savedTheme = localStorage.getItem(STORAGE_KEYS.theme);
+  if (savedTheme === 'light') {
+    document.documentElement.classList.add('light');
+    setText('themeToggle', 'Modo escuro');
+  }
+
+  wireEvents();
 
   const params = new URLSearchParams(window.location.search);
   const queryUsername = params.get('username')?.trim();
   const queryPassword = params.get('password')?.trim();
-  const storedUser = safeParseJSON(getStoredSession(), null);
+  const storedUser = getStoredSession();
 
   if (storedUser) {
-    state.user = storedUser;
-    document.getElementById('loginView')?.classList.add('is-hidden');
-    document.getElementById('appView')?.classList.remove('is-hidden');
-    document.getElementById('userInitials').textContent = state.user.initials || getInitials(state.user.username);
-    document.getElementById('userName').textContent = state.user.name || state.user.username;
-    navigateTo('dashboard');
-  } else if (queryUsername && queryPassword) {
-    const authenticatedUser = await authenticateUser(queryUsername, queryPassword);
-    if (authenticatedUser) {
-      state.user = authenticatedUser;
-      setStoredSession(state.user);
-      document.getElementById('loginView')?.classList.add('is-hidden');
-      document.getElementById('appView')?.classList.remove('is-hidden');
-      document.getElementById('userInitials').textContent = state.user.initials;
-      document.getElementById('userName').textContent = state.user.name;
-      navigateTo('dashboard');
-    } else {
-      document.getElementById('appView')?.classList.add('is-hidden');
-      document.getElementById('loginView')?.classList.remove('is-hidden');
-      showToast('Credenciais inválidas', 'error');
-    }
-  } else {
-    document.getElementById('appView')?.classList.add('is-hidden');
-    document.getElementById('loginView')?.classList.remove('is-hidden');
+    await enterApp(storedUser);
+    return;
   }
 
-  wireEvents();
-  updateXpUI();
+  if (queryUsername && queryPassword) {
+    const user = await authenticateUser(queryUsername, queryPassword);
+    if (user) {
+      await enterApp(user, true);
+      return;
+    }
+    showToast('Credenciais inválidas.', 'error');
+  }
+
+  loadLocalState();
+  renderConfiguracoes();
+  $('appView')?.classList.add('is-hidden');
+  $('loginView')?.classList.remove('is-hidden');
   setLoading(false);
 }
 

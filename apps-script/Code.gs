@@ -107,7 +107,7 @@ const SHEETS = {
     json: [],
     numbers: [],
   },
-  Usuários: {
+  'Usuários': {
     headers: ['id', 'username', 'password', 'name', 'role', 'createdAt', 'updatedAt'],
     json: [],
     numbers: [],
@@ -244,13 +244,15 @@ function ensureAllSheets(spreadsheet) {
   Object.keys(SHEETS).forEach(function (name) {
     const config = SHEETS[name];
     let sheet = spreadsheet.getSheetByName(name);
+    let created = false;
 
     if (!sheet) {
       sheet = spreadsheet.insertSheet(name);
+      created = true;
     }
 
-    ensureHeaders(sheet, config.headers);
-    styleSheet(sheet, config.headers.length);
+    const headersChanged = ensureHeaders(sheet, config.headers);
+    styleSheet(sheet, config.headers.length, created || headersChanged);
   });
 
   const defaultSheet = spreadsheet.getSheetByName('Sheet1') || spreadsheet.getSheetByName('Página1');
@@ -271,9 +273,12 @@ function ensureHeaders(sheet, headers) {
   if (mismatch) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
+
+  return mismatch;
 }
 
-function styleSheet(sheet, columns) {
+function styleSheet(sheet, columns, shouldResize) {
+  if (!shouldResize) return;
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, columns).setFontWeight('bold').setBackground('#111827').setFontColor('#ffffff');
   sheet.autoResizeColumns(1, columns);
@@ -521,8 +526,16 @@ function decodeCell(value, header, config) {
     return Number.isFinite(numeric) ? numeric : 0;
   }
 
-  if (value instanceof Date) {
+  if (value instanceof Date && header === 'date') {
     return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  if (value instanceof Date && (header === 'createdAt' || header === 'updatedAt' || header === 'completedAt')) {
+    return value.toISOString();
+  }
+
+  if (value instanceof Date && header === 'time') {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'HH:mm');
   }
 
   return value === null ? '' : value;
@@ -551,9 +564,5 @@ function decodeSettingValue(value) {
 }
 
 function jsonResponse(payload) {
-  const output = ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
-  output.setHeader('Access-Control-Allow-Origin', '*');
-  output.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  output.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  return output;
+  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
 }

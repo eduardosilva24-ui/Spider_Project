@@ -39,8 +39,12 @@ export function WorkoutsView({
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.date || !form.type.trim()) return;
-    await onSave('workouts', touch({ ...form, exercises: cleanExercises.length ? cleanExercises : form.exercises }));
-    setForm(createWorkout({ type: inferNextType(form.type) }));
+    try {
+      await onSave('workouts', touch({ ...form, exercises: cleanExercises.length ? cleanExercises : form.exercises }));
+      setForm(createWorkout({ type: inferNextType(form.type) }));
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
@@ -149,8 +153,12 @@ export function RunsView({ runs, onSave, saving }: { runs: RunEntry[]; onSave: S
     event.preventDefault();
     if (!form.date || form.distanceKm <= 0 || form.durationMinutes <= 0) return;
     const pace = form.pace.trim() || minutesToPace(form.distanceKm, form.durationMinutes);
-    await onSave('runs', touch({ ...form, pace }));
-    setForm(createRun());
+    try {
+      await onSave('runs', touch({ ...form, pace }));
+      setForm(createRun());
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
@@ -227,8 +235,12 @@ export function WeightView({ entries, onSave, saving }: { entries: WeightEntry[]
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.date || form.weightKg <= 0) return;
-    await onSave('weight', touch(form));
-    setForm(createWeight({ weightKg: form.weightKg }));
+    try {
+      await onSave('weight', touch(form));
+      setForm(createWeight({ weightKg: form.weightKg }));
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
@@ -294,8 +306,12 @@ export function MeasurementsView({
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.date) return;
-    await onSave('measurements', touch(form));
-    setForm(createMeasurement());
+    try {
+      await onSave('measurements', touch(form));
+      setForm(createMeasurement());
+    } catch {
+      // O erro já é mostrado pelo AppShell; o formulário permanece preenchido para nova tentativa.
+    }
   }
 
   return (
