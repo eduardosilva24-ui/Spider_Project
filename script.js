@@ -5,8 +5,10 @@
    ========================================================= */
 
 /* ---------- 1. Configuração inicial ---------- */
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwlCmNouFIy1GJeyZycaqIGM6HvKMc3QAPWC1CTbtyTc2EPQ36QDBDEFdAd_31RpzLKnw/exec';
+
 const CONFIG = {
-  apiUrl: localStorage.getItem('spider_api_url') || '',
+  apiUrl: localStorage.getItem('spider_api_url') || DEFAULT_API_URL,
   aguaMeta: Number(localStorage.getItem('spider_agua_meta')) || 2500,
   pesoMeta: Number(localStorage.getItem('spider_peso_meta')) || 0,
   xp: {
@@ -311,19 +313,37 @@ async function loadAll() {
 }
 
 async function saveRecord(category, record) {
-  // Salva local
-  state[category].push(record);
-  state[category].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const normalized = {
+    ...record,
+    id: record.id || uid(category),
+    date: record.date || record.data || todayStr(),
+    createdAt: record.createdAt || new Date().toISOString(),
+    updatedAt: record.updatedAt || new Date().toISOString(),
+  };
+
+  state[category] = [...state[category], normalized]
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
   saveLocal(category, state[category]);
 
-  // Salva na API
   if (hasApi()) {
     try {
-      await apiPost({ action: 'save' + cap(category), data: record });
-    } catch (e) {
-      console.warn('Falha ao salvar na API:', e);
+      await apiPost({ action: 'upsert', sheet: getSheetNameForCategory(category), record: normalized });
+    } catch (error) {
+      console.warn('Falha ao salvar na API:', error);
     }
   }
+}
+
+function getSheetNameForCategory(category) {
+  const mapping = {
+    treinos: 'Treinos',
+    corridas: 'Corridas',
+    peso: 'Peso',
+    medidas: 'Medidas',
+    nutricao: 'Nutrição',
+    agua: 'Água',
+  };
+  return mapping[category] || 'Diário';
 }
 
 function cap(str) {
@@ -343,10 +363,15 @@ function xpToNext() { return 500 - (state.xpTotal % 500); }
 function xpBarPct() { return ((state.xpTotal % 500) / 500) * 100; }
 
 function updateXpUI() {
-  $('sidebarXP').textContent = `${state.xpTotal} XP`;
-  $('sidebarXPBar').style.width = `${xpBarPct()}%`;
-  $('sidebarLevel').textContent = `Nível ${getLevel()}`;
-  $('userLevel').textContent = `Nível ${getLevel()}`;
+  const sidebarXP = $('sidebarXP');
+  const sidebarXPBar = $('sidebarXPBar');
+  const sidebarLevel = $('sidebarLevel');
+  const userLevel = $('userLevel');
+
+  if (sidebarXP) sidebarXP.textContent = `${state.xpTotal} XP`;
+  if (sidebarXPBar) sidebarXPBar.style.width = `${xpBarPct()}%`;
+  if (sidebarLevel) sidebarLevel.textContent = `Nível ${getLevel()}`;
+  if (userLevel) userLevel.textContent = `Nível ${getLevel()}`;
 }
 
 /* ---------- 3. Spider Score (0-100) ---------- */
@@ -687,8 +712,15 @@ async function apiPost(payload) {
 }
 
 function wireEvents() {
-  document.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigateTo(btn.dataset.page)));
-  document.querySelectorAll('[data-page]').forEach(btn => btn.addEventListener('click', () => navigateTo(btn.dataset.page)));
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.removeEventListener('click', handleNavClick);
+    btn.addEventListener('click', handleNavClick);
+  });
+
+  document.querySelectorAll('[data-page]').forEach((btn) => {
+    btn.removeEventListener('click', handleNavClick);
+    btn.addEventListener('click', handleNavClick);
+  });
 
   document.getElementById('themeToggle')?.addEventListener('click', () => {
     const isLight = document.documentElement.classList.toggle('light');
@@ -772,14 +804,17 @@ function wireEvents() {
 
   document.querySelectorAll('.button-subtle[data-ml]').forEach(btn => btn.addEventListener('click', async () => {
     const qty = Number(btn.dataset.ml);
-    const payload = { action: 'saveAgua', data: { data: new Date().toISOString(), quantidade: qty, xpGain: CONFIG.xp.agua } };
-    state.data.agua.push(payload.data);
-    persistData();
+    const record = {
+      id: uid('agua'),
+      date: todayStr(),
+      amountMl: qty,
+      notes: '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('agua', record);
     updateXpUI();
     renderAgua();
-    if (CONFIG.apiUrl) {
-      try { await apiPost(payload); } catch { }
-    }
     showToast(`+${qty} ml registrados`, 'success');
   }));
 
@@ -790,12 +825,21 @@ function wireEvents() {
   document.getElementById('btnNovasMedidas')?.addEventListener('click', () => openModal('medidasModal'));
   document.getElementById('btnNovaRefeicao')?.addEventListener('click', () => openModal('refeicaoModal'));
 
-  document.getElementById('treinoForm')?.addEventListener('submit', (event) => {
+  document.getElementById('treinoForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = { ...payload, data: payload.data || new Date().toISOString(), xpGain: CONFIG.xp.treino };
-    state.data.treinos.push(record);
-    persistData();
+    const record = {
+      id: uid('treino'),
+      date: payload.data || todayStr(),
+      type: payload.tipo || 'Outro',
+      durationMinutes: Number(payload.duracao || 0),
+      exercises: payload.exercicios || '',
+      notes: payload.observacoes || '',
+      status: 'done',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('treinos', record);
     updateXpUI();
     renderTreinos();
     renderDashboard();
@@ -804,13 +848,26 @@ function wireEvents() {
     showToast('Treino registrado', 'success');
   });
 
-  document.getElementById('corridaForm')?.addEventListener('submit', (event) => {
+  document.getElementById('corridaForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
     const pace = payload.tempo && payload.distancia ? (payload.tempo.split(':').reduce((acc, part, idx) => acc + Number(part) * [3600, 60, 1][idx], 0) / Number(payload.distancia)).toFixed(2) : '—';
-    const record = { ...payload, pace, data: payload.data || new Date().toISOString(), xpGain: CONFIG.xp.corrida };
-    state.data.corridas.push(record);
-    persistData();
+    const record = {
+      id: uid('corrida'),
+      date: payload.data || todayStr(),
+      distanceKm: Number(payload.distancia || 0),
+      durationMinutes: Number(payload.duracao || 0),
+      pace,
+      elevationM: Number(payload.elevacao || 0),
+      location: payload.local || '',
+      temperatureC: Number(payload.temperatura || 0),
+      feeling: payload.sensacao || '',
+      notes: payload.observacoes || '',
+      stravaUrl: payload.stravaUrl || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('corridas', record);
     updateXpUI();
     renderCorridas();
     renderDashboard();
@@ -819,12 +876,18 @@ function wireEvents() {
     showToast('Corrida registrada', 'success');
   });
 
-  document.getElementById('pesoForm')?.addEventListener('submit', (event) => {
+  document.getElementById('pesoForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = { ...payload, data: payload.data || new Date().toISOString(), xpGain: CONFIG.xp.peso };
-    state.data.peso.push(record);
-    persistData();
+    const record = {
+      id: uid('peso'),
+      date: payload.data || todayStr(),
+      weightKg: Number(payload.peso || 0),
+      notes: payload.observacoes || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('peso', record);
     updateXpUI();
     renderPeso();
     renderDashboard();
@@ -833,12 +896,26 @@ function wireEvents() {
     showToast('Peso registrado', 'success');
   });
 
-  document.getElementById('medidasForm')?.addEventListener('submit', (event) => {
+  document.getElementById('medidasForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = { ...payload, data: payload.data || new Date().toISOString(), xpGain: 30 };
-    state.data.medidas.push(record);
-    persistData();
+    const record = {
+      id: uid('medida'),
+      date: payload.data || todayStr(),
+      leftArmCm: Number(payload.braçoEsq || 0),
+      rightArmCm: Number(payload.braçoDir || 0),
+      chestCm: Number(payload.peito || 0),
+      waistCm: Number(payload.cintura || 0),
+      hipCm: Number(payload.quadril || 0),
+      thighCm: Number(payload.coxa || 0),
+      calfCm: Number(payload.panturrilha || 0),
+      neckCm: Number(payload.pescoço || 0),
+      forearmCm: Number(payload.antebraço || 0),
+      notes: payload.observacoes || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('medidas', record);
     updateXpUI();
     renderMedidas();
     renderDashboard();
@@ -847,12 +924,20 @@ function wireEvents() {
     showToast('Medidas registradas', 'success');
   });
 
-  document.getElementById('refeicaoForm')?.addEventListener('submit', (event) => {
+  document.getElementById('refeicaoForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = { ...payload, data: payload.data || new Date().toISOString(), xpGain: CONFIG.xp.nutricao };
-    state.data.refeicoes.push(record);
-    persistData();
+    const record = {
+      id: uid('refeicao'),
+      date: payload.data || todayStr(),
+      time: payload.hora || '',
+      type: payload.tipo || 'Outro',
+      foods: payload.alimentos || '',
+      notes: payload.observacoes || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('nutricao', record);
     updateXpUI();
     renderNutricao();
     renderDashboard();
@@ -861,12 +946,18 @@ function wireEvents() {
     showToast('Refeição registrada', 'success');
   });
 
-  document.getElementById('aguaForm')?.addEventListener('submit', (event) => {
+  document.getElementById('aguaForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    const record = { ...payload, data: payload.data || new Date().toISOString(), quantidade: payload.quantidade, xpGain: CONFIG.xp.agua };
-    state.data.agua.push(record);
-    persistData();
+    const record = {
+      id: uid('agua'),
+      date: payload.data || todayStr(),
+      amountMl: Number(payload.quantidade || 0),
+      notes: payload.observacoes || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveRecord('agua', record);
     updateXpUI();
     renderAgua();
     renderDashboard();
@@ -874,6 +965,12 @@ function wireEvents() {
     closeModal('aguaModal');
     showToast('Água registrada', 'success');
   });
+}
+
+function handleNavClick(event) {
+  const page = event.currentTarget?.dataset?.page;
+  if (!page) return;
+  navigateTo(page);
 }
 
 function openModal(id) { document.getElementById(id)?.showModal(); }

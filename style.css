@@ -285,7 +285,7 @@ svg { fill: currentColor; width: 20px; height: 20px; flex-shrink: 0; }
 /* =========================================================
    App shell
    ========================================================= */
-.app-shell { display: flex; min-height: 100vh; position: relative; }
+.app-shell { display: flex; min-height: 100vh; position: relative; isolation: isolate; }
 
 .sidebar {
   width: 260px;
@@ -327,6 +327,8 @@ svg { fill: currentColor; width: 20px; height: 20px; flex-shrink: 0; }
   cursor: pointer;
   text-align: left;
   transition: background 0.2s ease, color 0.2s ease;
+  position: relative;
+  z-index: 1;
 }
 .nav-item:hover { background: var(--card); color: var(--ink); }
 .nav-item.is-active {
@@ -474,6 +476,7 @@ html.light .topbar { background: rgba(255,255,255,0.8); }
 
 .page { display: none; animation: pageIn 0.3s ease; }
 .page.is-active { display: block; }
+.page button, .page .button, .page .text-button, .page .nav-item { pointer-events: auto; }
 @keyframes pageIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
