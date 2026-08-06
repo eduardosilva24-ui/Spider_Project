@@ -107,6 +107,11 @@ const SHEETS = {
     json: [],
     numbers: [],
   },
+  Usuários: {
+    headers: ['id', 'username', 'password', 'name', 'role', 'createdAt', 'updatedAt'],
+    json: [],
+    numbers: [],
+  },
 };
 
 function doGet(e) {
@@ -161,6 +166,10 @@ function handleRequest(e, method) {
     try {
       const spreadsheet = getSpreadsheet();
       ensureAllSheets(spreadsheet);
+
+      if (action === 'login') {
+        return jsonResponse({ ok: true, data: loginUser(spreadsheet, body) });
+      }
 
       if (action === 'upsert') {
         return jsonResponse({ ok: true, data: upsertRecord(spreadsheet, body.sheet, body.record) });
@@ -246,6 +255,7 @@ function ensureAllSheets(spreadsheet) {
   }
 
   ensureDefaultSettings(spreadsheet);
+  ensureDefaultUsers(spreadsheet);
 }
 
 function ensureHeaders(sheet, headers) {
@@ -274,6 +284,48 @@ function ensureDefaultSettings(spreadsheet) {
 
   if (!missing && sheet.getLastRow() > 1) return;
   writeSettings(spreadsheet, Object.assign({}, DEFAULT_SETTINGS, settings));
+}
+
+function ensureDefaultUsers(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('Usuários');
+  if (!sheet) return;
+  if (sheet.getLastRow() > 1) return;
+
+  const now = new Date().toISOString();
+  sheet.appendRow(['default_user', 'admin', '123456', 'Administrador', 'admin', now, now]);
+}
+
+function loginUser(spreadsheet, body) {
+  const payload = body && body.data ? body.data : body;
+  const username = String(payload && payload.username ? payload.username : '').trim();
+  const password = String(payload && payload.password ? payload.password : '');
+
+  if (!username || !password) {
+    throw new Error('Usuário e senha são obrigatórios.');
+  }
+
+  const sheet = spreadsheet.getSheetByName('Usuários');
+  if (!sheet || sheet.getLastRow() <= 1) {
+    ensureDefaultUsers(spreadsheet);
+  }
+
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  const found = values.find(function (row) {
+    return String(row[1]).toLowerCase() === username.toLowerCase() && String(row[2]) === password;
+  });
+
+  if (!found) {
+    throw new Error('Usuário ou senha inválidos.');
+  }
+
+  return {
+    user: {
+      id: found[0] || '',
+      username: String(found[1]),
+      name: String(found[3] || found[1]),
+      role: String(found[4] || 'user'),
+    },
+  };
 }
 
 function readBootstrap(spreadsheet) {

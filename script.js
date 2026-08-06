@@ -617,20 +617,45 @@ function wireEvents() {
     if (button) button.disabled = true;
     if (loader) loader.style.display = 'inline-block';
     await new Promise(resolve => setTimeout(resolve, 600));
-    const users = safeParseJSON(localStorage.getItem('spider_users'), []);
-    const found = users.find(user => user.username === username && user.password === password);
-    if (!found) {
+
+    let authenticatedUser = null;
+
+    if (CONFIG.apiUrl) {
+      try {
+        const res = await apiPost({ action: 'login', username, password });
+        if (res && res.ok !== false && res.data && res.data.user) {
+          authenticatedUser = res.data.user;
+        }
+      } catch (apiError) {
+        console.warn('Falha no login via Apps Script:', apiError);
+      }
+    }
+
+    if (!authenticatedUser) {
+      const users = safeParseJSON(localStorage.getItem('spider_users'), []);
+      authenticatedUser = users.find(user => user.username === username && user.password === password);
+    }
+
+    if (!authenticatedUser) {
       if (error) error.textContent = 'Usuário ou senha inválidos.';
       if (button) button.disabled = false;
       if (loader) loader.style.display = 'none';
       return;
     }
-    state.user = { username, initials: getInitials(username) };
+
+    const displayName = authenticatedUser.name || authenticatedUser.username || username;
+    state.user = {
+      username: authenticatedUser.username || username,
+      name: displayName,
+      initials: getInitials(displayName),
+      role: authenticatedUser.role || 'user',
+    };
+
     setStoredSession(state.user);
     document.getElementById('loginView')?.classList.add('is-hidden');
     document.getElementById('appView')?.classList.remove('is-hidden');
     document.getElementById('userInitials').textContent = state.user.initials;
-    document.getElementById('userName').textContent = state.user.username;
+    document.getElementById('userName').textContent = state.user.name;
     updateXpUI();
     navigateTo('dashboard');
     if (button) button.disabled = false;
