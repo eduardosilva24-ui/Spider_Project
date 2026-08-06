@@ -330,6 +330,7 @@ async function saveRecord(category, record) {
       await apiPost({ action: 'upsert', sheet: getSheetNameForCategory(category), record: normalized });
     } catch (error) {
       console.warn('Falha ao salvar na API:', error);
+      showToast('Registro salvo localmente. A sincronização com o Google Sheets falhou.', 'warning');
     }
   }
 }
@@ -698,17 +699,37 @@ function loadData() {
 }
 
 async function apiGet(action) {
-  const res = await fetch(`${CONFIG.apiUrl}?action=${action}`);
-  return res.json();
+  const res = await fetch(`${CONFIG.apiUrl}?action=${action}`, { method: 'GET', redirect: 'follow' });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Falha na requisição (${res.status})`);
+  }
+  return parseJsonResponse(res);
 }
 
 async function apiPost(payload) {
   const res = await fetch(CONFIG.apiUrl, {
     method: 'POST',
+    redirect: 'follow',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
-  return res.json();
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Falha na requisição (${res.status})`);
+  }
+  return parseJsonResponse(res);
+}
+
+async function parseJsonResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(raw || 'Resposta inválida do Apps Script.');
+  }
 }
 
 function wireEvents() {

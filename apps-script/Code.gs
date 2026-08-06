@@ -122,6 +122,10 @@ function doPost(e) {
   return handleRequest(e, 'POST');
 }
 
+function doOptions(e) {
+  return jsonResponse({ ok: true, data: { status: 'ok' } });
+}
+
 function handleRequest(e, method) {
   try {
     const action = getAction(e, method);
@@ -547,5 +551,9 @@ function decodeSettingValue(value) {
 }
 
 function jsonResponse(payload) {
-  return ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+  const output = ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+  output.setHeader('Access-Control-Allow-Origin', '*');
+  output.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  output.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  return output;
 }
