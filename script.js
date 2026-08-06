@@ -63,6 +63,7 @@ const MISSIONS = [
 /* ---------- Estado ---------- */
 let state = {
   user: null,
+  currentPage: 'dashboard',
   treinos: [],
   corridas: [],
   peso: [],
@@ -137,6 +138,118 @@ function loadLocal(key, fallback) {
 }
 function saveLocal(key, value) {
   localStorage.setItem(LS_KEYS[key], JSON.stringify(value));
+}
+
+function safeParseJSON(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function getInitials(value) {
+  const source = String(value || '').trim();
+  if (!source) return 'SP';
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'SP';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function ensureDefaultUsers() {
+  const storedUsers = safeParseJSON(localStorage.getItem('spider_users'), []);
+  if (Array.isArray(storedUsers) && storedUsers.length) return storedUsers;
+
+  const defaultUsers = [{ username: 'admin', password: '123456', name: 'Administrador', role: 'admin' }];
+  localStorage.setItem('spider_users', JSON.stringify(defaultUsers));
+  return defaultUsers;
+}
+
+function getStoredSession() {
+  return localStorage.getItem('spider_session');
+}
+
+function setStoredSession(user) {
+  localStorage.setItem('spider_session', JSON.stringify(user));
+}
+
+function clearStoredSession() {
+  localStorage.removeItem('spider_session');
+}
+
+function setLoading(isLoading) {
+  const loading = document.getElementById('loadingState');
+  if (loading) loading.style.display = isLoading ? 'flex' : 'none';
+}
+
+function showToast(message, type = 'info') {
+  const region = document.getElementById('toastRegion');
+  if (!region) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  region.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('is-visible'));
+
+  window.setTimeout(() => {
+    toast.classList.remove('is-visible');
+    window.setTimeout(() => toast.remove(), 220);
+  }, 2200);
+}
+
+function navigateTo(page) {
+  state.currentPage = page;
+
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.page === page);
+  });
+
+  document.querySelectorAll('.page').forEach((panel) => {
+    panel.classList.toggle('is-active', panel.dataset.pagePanel === page);
+  });
+
+  const title = document.getElementById('pageTitle');
+  const eyebrow = document.getElementById('pageEyebrow');
+  if (title) title.textContent = PAGE_TITLES[page] || 'Dashboard';
+  if (eyebrow) eyebrow.textContent = PAGE_EYEBROWS[page] || 'Visão geral';
+}
+
+function renderPage(page) {
+  navigateTo(page);
+}
+
+async function authenticateUser(username, password) {
+  const localUsers = ensureDefaultUsers();
+  const localUser = localUsers.find((user) => user.username === username && user.password === password);
+  if (localUser) {
+    return {
+      username: localUser.username,
+      name: localUser.name || localUser.username,
+      initials: getInitials(localUser.name || localUser.username),
+      role: localUser.role || 'user',
+    };
+  }
+
+  if (CONFIG.apiUrl) {
+    try {
+      const res = await apiPost({ action: 'login', username, password });
+      if (res && res.ok !== false && res.data && res.data.user) {
+        return {
+          username: res.data.user.username || username,
+          name: res.data.user.name || res.data.user.username || username,
+          initials: getInitials(res.data.user.name || res.data.user.username || username),
+          role: res.data.user.role || 'user',
+        };
+      }
+    } catch (error) {
+      console.warn('Falha no login via Apps Script:', error);
+    }
+  }
+
+  return null;
 }
 
 /* ---------- 5. API (Google Apps Script) ---------- */
@@ -229,7 +342,7 @@ function getLevel() { return Math.floor(state.xpTotal / 500) + 1; }
 function xpToNext() { return 500 - (state.xpTotal % 500); }
 function xpBarPct() { return ((state.xpTotal % 500) / 500) * 100; }
 
-function updateXPUI() {
+function updateXpUI() {
   $('sidebarXP').textContent = `${state.xpTotal} XP`;
   $('sidebarXPBar').style.width = `${xpBarPct()}%`;
   $('sidebarLevel').textContent = `Nível ${getLevel()}`;
@@ -614,28 +727,12 @@ function wireEvents() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
     const error = document.getElementById('loginError');
+
     if (button) button.disabled = true;
     if (loader) loader.style.display = 'inline-block';
     await new Promise(resolve => setTimeout(resolve, 600));
 
-    let authenticatedUser = null;
-
-    if (CONFIG.apiUrl) {
-      try {
-        const res = await apiPost({ action: 'login', username, password });
-        if (res && res.ok !== false && res.data && res.data.user) {
-          authenticatedUser = res.data.user;
-        }
-      } catch (apiError) {
-        console.warn('Falha no login via Apps Script:', apiError);
-      }
-    }
-
-    if (!authenticatedUser) {
-      const users = safeParseJSON(localStorage.getItem('spider_users'), []);
-      authenticatedUser = users.find(user => user.username === username && user.password === password);
-    }
-
+    const authenticatedUser = await authenticateUser(username, password);
     if (!authenticatedUser) {
       if (error) error.textContent = 'Usuário ou senha inválidos.';
       if (button) button.disabled = false;
@@ -643,14 +740,7 @@ function wireEvents() {
       return;
     }
 
-    const displayName = authenticatedUser.name || authenticatedUser.username || username;
-    state.user = {
-      username: authenticatedUser.username || username,
-      name: displayName,
-      initials: getInitials(displayName),
-      role: authenticatedUser.role || 'user',
-    };
-
+    state.user = authenticatedUser;
     setStoredSession(state.user);
     document.getElementById('loginView')?.classList.add('is-hidden');
     document.getElementById('appView')?.classList.remove('is-hidden');
@@ -789,23 +879,44 @@ function wireEvents() {
 function openModal(id) { document.getElementById(id)?.showModal(); }
 function closeModal(id) { document.getElementById(id)?.close(); }
 
-function bootstrap() {
+async function bootstrap() {
   ensureDefaultUsers();
   loadData();
   const savedTheme = localStorage.getItem('spider_theme');
   if (savedTheme === 'light') document.documentElement.classList.add('light');
+
+  const params = new URLSearchParams(window.location.search);
+  const queryUsername = params.get('username')?.trim();
+  const queryPassword = params.get('password')?.trim();
   const storedUser = safeParseJSON(getStoredSession(), null);
+
   if (storedUser) {
     state.user = storedUser;
     document.getElementById('loginView')?.classList.add('is-hidden');
     document.getElementById('appView')?.classList.remove('is-hidden');
     document.getElementById('userInitials').textContent = state.user.initials || getInitials(state.user.username);
-    document.getElementById('userName').textContent = state.user.username;
+    document.getElementById('userName').textContent = state.user.name || state.user.username;
     navigateTo('dashboard');
+  } else if (queryUsername && queryPassword) {
+    const authenticatedUser = await authenticateUser(queryUsername, queryPassword);
+    if (authenticatedUser) {
+      state.user = authenticatedUser;
+      setStoredSession(state.user);
+      document.getElementById('loginView')?.classList.add('is-hidden');
+      document.getElementById('appView')?.classList.remove('is-hidden');
+      document.getElementById('userInitials').textContent = state.user.initials;
+      document.getElementById('userName').textContent = state.user.name;
+      navigateTo('dashboard');
+    } else {
+      document.getElementById('appView')?.classList.add('is-hidden');
+      document.getElementById('loginView')?.classList.remove('is-hidden');
+      showToast('Credenciais inválidas', 'error');
+    }
   } else {
     document.getElementById('appView')?.classList.add('is-hidden');
     document.getElementById('loginView')?.classList.remove('is-hidden');
   }
+
   wireEvents();
   updateXpUI();
   setLoading(false);
